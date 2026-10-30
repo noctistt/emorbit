@@ -17,7 +17,7 @@ The current popup is event driven and rendered with Direct2D and DirectWrite. Pu
 
 Keep geometry and hit testing, interaction state, emoji sequences and search, preferences, Windows focus and insertion, and rendering separate. Pure logic should be testable without Windows.
 
-Represent states explicitly: hidden, quick selection, contextual selection, persistent search, and pinned. Prevent key release after entering search from accidentally committing a gesture.
+Represent states explicitly: hidden, quick selection, contextual selection, persistent search, and pinned. Opening is a shortcut tap; selection is primary mouse press, movement, and mouse release. Keyboard release does not commit selection. Track the press origin separately from hover so toolbar controls cannot activate when crossed during a selection drag. While a gesture is active, sample the actual pointer and primary mouse button state on a short timer, including outside the popup. Stop that timer after release, cancellation, or hiding. Ignore duplicate mouse up delivery after a timer already processed the release.
 
 ## First technical proof
 

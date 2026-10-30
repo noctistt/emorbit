@@ -12,7 +12,7 @@ See [running and testing](docs/TESTING.md) for build instructions, controls, CI 
 
 ## Planned experience
 
-* Hold a configurable activation shortcut, move toward an emoji, and release to insert.
+* Tap an activation shortcut to open, then hold the primary mouse button, move toward an emoji, and release the mouse button to insert.
 * Pause over a selection to reveal an outer arc with related expressions, repeated versions, or supported skin tones.
 * Click Search in the centre and type to replace the wheel contents with search results.
 * Pin the picker to keep it visible while inserting multiple emojis.
@@ -24,6 +24,8 @@ See [running and testing](docs/TESTING.md) for build instructions, controls, CI 
 Rust with native Windows APIs, Direct2D for the interface, and DirectWrite for text and emoji rendering. Windows integration will use the `windows` crate. No browser engine, account, server, or AI is planned.
 
 Memory usage and application compatibility have not been measured. Emoji appearance and glyph coverage depend on the Windows fonts available.
+
+The current shortcut is Ctrl + Alt + Space. Release those keys after opening; selection uses the mouse button. You can also click an emoji normally. Configurable shortcuts remain planned.
 
 ## Documentation
 

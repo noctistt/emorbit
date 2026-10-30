@@ -22,6 +22,25 @@ pub enum Hit {
     Drag,
 }
 
+/// Resolve a press and release without turning a drag across toolbar buttons
+/// into an accidental close, pin, or search action. Moving from the centre or
+/// an emoji onto another emoji is a selection gesture; returning to centre
+/// cancels it. A stationary centre click still opens search.
+pub fn release_target(pressed: Hit, released: Hit) -> Option<Hit> {
+    match (pressed, released) {
+        (
+            Hit::Search | Hit::Item(_) | Hit::Variant(_) | Hit::None,
+            Hit::Item(_) | Hit::Variant(_),
+        ) => Some(released),
+        (Hit::Search, Hit::Search)
+        | (Hit::Pin, Hit::Pin)
+        | (Hit::Close, Hit::Close)
+        | (Hit::Previous, Hit::Previous)
+        | (Hit::Next, Hit::Next) => Some(released),
+        _ => None,
+    }
+}
+
 pub fn item_position(index: usize) -> Point {
     let angle = -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::FRAC_PI_4;
     Point {
@@ -91,6 +110,39 @@ pub fn clamp_origin(x: i32, y: i32, width: i32, height: i32, work: [i32; 4]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_drag_selects_the_release_target_including_variants() {
+        assert_eq!(
+            release_target(Hit::Search, Hit::Item(2)),
+            Some(Hit::Item(2))
+        );
+        assert_eq!(
+            release_target(Hit::Item(2), Hit::Variant(4)),
+            Some(Hit::Variant(4))
+        );
+        assert_eq!(
+            release_target(Hit::Item(0), Hit::Item(7)),
+            Some(Hit::Item(7))
+        );
+        assert_eq!(
+            release_target(Hit::Item(0), Hit::Item(0)),
+            Some(Hit::Item(0))
+        );
+    }
+
+    #[test]
+    fn dragging_back_to_centre_or_outside_cancels_without_toolbar_actions() {
+        for origin in [Hit::Item(0), Hit::Variant(1), Hit::Search] {
+            assert_eq!(release_target(origin, Hit::None), None);
+            assert_eq!(release_target(origin, Hit::Close), None);
+            assert_eq!(release_target(origin, Hit::Pin), None);
+        }
+        assert_eq!(release_target(Hit::Item(0), Hit::Search), None);
+        assert_eq!(release_target(Hit::Pin, Hit::Item(0)), None);
+        assert_eq!(release_target(Hit::Search, Hit::Search), Some(Hit::Search));
+        assert_eq!(release_target(Hit::Pin, Hit::Pin), Some(Hit::Pin));
+    }
 
     #[test]
     fn every_visible_target_is_reachable() {

@@ -4,7 +4,9 @@ Status: proposed behaviour requiring Windows prototypes and user testing.
 
 ## Quick selection
 
-A configurable hold shortcut opens the dial near the pointer. Approximately eight stable primary positions show favourites or categories. Movement highlights a segment. Releasing the activation gesture commits a valid highlighted selection. Returning to the central cancel area or pressing Escape cancels without insertion. Exact bindings remain undecided; overriding Windows emoji shortcuts is deferred.
+A shortcut tap opens the dial near the pointer and leaves it open after the keys are released. Press and hold the primary mouse button in the centre or over an emoji, move to a selection, then release the mouse button to insert. A normal emoji click also works. Approximately eight stable primary positions show favourites or categories. Returning from an emoji to the centre or releasing outside the targets cancels without insertion. A stationary centre click opens Search. Pressing Escape dismisses the picker. The prototype shortcut is Ctrl + Alt + Space; configuration and overriding Windows emoji shortcuts are deferred.
+
+Releasing a gesture over Pin, Close, or a page arrow must not activate that control unless the press began on the same control. Releasing the shortcut keys never commits a mouse gesture. Only a press originating in the picker starts gesture tracking; ordinary clicks elsewhere do not select anything. Respect swapped primary mouse buttons.
 
 A brief dwell opens a contextual outer arc. Movement through a segment should not immediately open another menu. Use forgiving pointer corridors and stable geometry so the submenu remains reachable.
 
@@ -16,7 +18,7 @@ Preview the exact output before committing. Store an optional preferred tone loc
 
 ## Search
 
-Clicking the central search button enters a persistent search state: the user can release the activation shortcut and type. Search replaces the primary wheel results. Result pages are navigable with the mouse wheel and keyboard, with a visible page indicator. A clear action restores the home dial. Enter inserts the highlighted result. Escape exits search before dismissing the picker.
+Clicking the central search button enters a persistent search state and activates the search input. Search replaces the primary wheel results. Result pages are navigable with the mouse wheel and keyboard, with a visible page indicator. A clear action restores the home dial. Enter inserts the highlighted result. Escape exits search before dismissing the picker. The prototype currently inserts the first result on Enter; full keyboard navigation remains planned.
 
 Search temporarily requires keyboard focus. Retain the external destination separately so selecting a search result does not target the picker itself.
 

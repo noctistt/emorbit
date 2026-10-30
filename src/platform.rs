@@ -92,7 +92,7 @@ struct App {
     graphics: Option<Graphics>,
     visible: bool,
     pinned: bool,
-    quick: bool,
+    mouse_origin: Option<Hit>,
     searching: bool,
     destination: Option<Destination>,
     results: Vec<usize>,
@@ -113,14 +113,14 @@ impl App {
             graphics: None,
             visible: false,
             pinned: false,
-            quick: false,
+            mouse_origin: None,
             searching: false,
             destination: None,
             results: catalog::search(""),
             page: 0,
             hover: Hit::None,
             context: None,
-            status: "Hold Ctrl + Alt + Space to choose".into(),
+            status: "Tap Ctrl + Alt + Space to open".into(),
             pending: None,
             dpi: 96,
             tray: NOTIFYICONDATAW::default(),
@@ -144,16 +144,16 @@ impl App {
         let _ = InvalidateRect(Some(self.hwnd), None, false);
     }
 
-    unsafe fn show(&mut self, quick: bool) {
+    unsafe fn show(&mut self) {
         self.destination = Destination::capture(self.hwnd);
         self.visible = true;
-        self.quick = quick && !self.pinned;
+        self.mouse_origin = None;
         self.searching = false;
         self.hover = Hit::None;
         self.context = None;
         self.page = 0;
         self.results = catalog::search("");
-        self.status = "Move to choose · hover for variants".into();
+        self.status = "Hold mouse · move · release to select".into();
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
         let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
@@ -198,15 +198,12 @@ impl App {
         {
             self.status = "Escape unavailable; use the close button".into();
         }
-        if self.quick {
-            SetTimer(Some(self.hwnd), TICK, 16, None);
-        }
         self.invalidate();
     }
 
     unsafe fn hide(&mut self) {
         self.visible = false;
-        self.quick = false;
+        self.mouse_origin = None;
         self.context = None;
         let _ = KillTimer(Some(self.hwnd), DWELL);
         if self.pending.is_none() {
@@ -221,7 +218,7 @@ impl App {
     }
 
     unsafe fn begin_search(&mut self) {
-        self.quick = false;
+        self.mouse_origin = None;
         if self.pending.is_some() {
             return;
         }
@@ -288,7 +285,7 @@ impl App {
         if self.pending.is_some() {
             return;
         }
-        self.quick = false;
+        self.mouse_origin = None;
         let _ = KillTimer(Some(self.hwnd), DWELL);
         if !self.searching {
             self.destination = Destination::capture(self.hwnd);
@@ -368,32 +365,72 @@ impl App {
                 }
             }
             self.invalidate();
-        } else if self.quick && GetAsyncKeyState(VK_SPACE.0 as i32) >= 0 {
-            self.quick = false;
-            let _ = KillTimer(Some(self.hwnd), TICK);
-            // WM_MOUSEMOVE stops arriving outside the popup. Recheck the actual
-            // pointer at release so an old highlight cannot commit by accident.
-            let mut cursor = POINT::default();
-            self.hover = if GetCursorPos(&mut cursor).is_ok()
-                && ScreenToClient(self.hwnd, &mut cursor).as_bool()
-            {
-                let scale = self.dpi as f32 / 96.0;
-                wheel::hit_test(
-                    Point {
-                        x: cursor.x as f32 / scale,
-                        y: cursor.y as f32 / scale,
-                    },
-                    self.items().len(),
-                    self.variants().len(),
-                )
+        } else if self.mouse_origin.is_some() {
+            // No global mouse hook or capture: the nonactivating picker leaves
+            // the text field focused. Poll only during a press that began here,
+            // including when WM_MOUSEMOVE/UP stop arriving outside the window.
+            self.refresh_pointer();
+            let primary = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+                VK_RBUTTON
             } else {
-                Hit::None
+                VK_LBUTTON
             };
-            if let Some(text) = self.selection(self.hover) {
-                self.choose(text);
-            } else {
-                self.hide();
+            if GetAsyncKeyState(primary.0 as i32) >= 0 {
+                self.finish_mouse();
             }
+        }
+    }
+
+    unsafe fn refresh_pointer(&mut self) {
+        let mut cursor = POINT::default();
+        if GetCursorPos(&mut cursor).is_ok() && ScreenToClient(self.hwnd, &mut cursor).as_bool() {
+            let scale = self.dpi as f32 / 96.0;
+            self.pointer(Point {
+                x: cursor.x as f32 / scale,
+                y: cursor.y as f32 / scale,
+            });
+        } else {
+            self.hover = Hit::None;
+        }
+    }
+
+    unsafe fn begin_mouse(&mut self) {
+        if self.pending.is_some() {
+            return;
+        }
+        if !self.searching {
+            self.destination = Destination::capture(self.hwnd);
+        }
+        self.refresh_pointer();
+        self.mouse_origin = Some(self.hover);
+        SetTimer(Some(self.hwnd), TICK, 16, None);
+    }
+
+    unsafe fn finish_mouse(&mut self) {
+        let Some(origin) = self.mouse_origin.take() else {
+            return;
+        };
+        let _ = KillTimer(Some(self.hwnd), TICK);
+        let _ = KillTimer(Some(self.hwnd), DWELL);
+        self.refresh_pointer();
+        if let Some(target) = wheel::release_target(origin, self.hover) {
+            if matches!(target, Hit::Item(_) | Hit::Variant(_))
+                && !self.searching
+                && !self
+                    .destination
+                    .is_some_and(|destination| destination.still_focused())
+            {
+                self.status = "Cancelled: focus changed during the mouse gesture".into();
+                self.invalidate();
+                return;
+            }
+            self.hover = target;
+            self.click();
+        } else if !self.pinned && !self.searching {
+            self.hide();
+        } else {
+            self.status = "Cancelled · hold mouse and move to choose".into();
+            self.invalidate();
         }
     }
 
@@ -430,12 +467,12 @@ impl App {
             Hit::Search => self.begin_search(),
             Hit::Pin => {
                 self.pinned = !self.pinned;
-                self.quick = false;
+                self.mouse_origin = None;
                 if self.pending.is_none() {
                     let _ = KillTimer(Some(self.hwnd), TICK);
                 }
                 self.status = if self.pinned {
-                    "Pinned · click emojis while typing"
+                    "Pinned · click or drag to select"
                 } else {
                     "Unpinned · next selection closes"
                 }
@@ -772,7 +809,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.pending = None;
                 app.hide();
             } else {
-                app.show(true);
+                app.show();
             }
         }
         WM_HOTKEY if wp.0 == ESCAPE_KEY as usize => {
@@ -794,7 +831,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             });
         }
         WM_LBUTTONDOWN if app.hover == Hit::Drag => {
-            app.quick = false;
+            app.mouse_origin = None;
             if app.pending.is_none() {
                 let _ = KillTimer(Some(hwnd), TICK);
             }
@@ -806,7 +843,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 None,
             );
         }
-        WM_LBUTTONUP => app.click(),
+        WM_LBUTTONDOWN => app.begin_mouse(),
+        WM_LBUTTONUP => app.finish_mouse(),
         WM_MOUSEWHEEL => app.change_page(if ((wp.0 >> 16) as u16 as i16) > 0 {
             -1
         } else {
@@ -834,7 +872,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         FOREGROUND if app.visible && !app.searching && app.pending.is_none() => {
             if let Some(target) = Destination::capture(hwnd) {
-                if app.pinned {
+                if app.mouse_origin.is_some() {
+                    app.mouse_origin = None;
+                    let _ = KillTimer(Some(hwnd), TICK);
+                    let _ = KillTimer(Some(hwnd), DWELL);
+                    app.status = "Gesture cancelled: destination changed".into();
+                    if !app.pinned {
+                        app.hide();
+                    } else {
+                        app.destination = Some(target);
+                        app.invalidate();
+                    }
+                } else if app.pinned {
                     app.destination = Some(target);
                 } else if app
                     .destination
@@ -846,7 +895,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         SHOW => {
             if !app.visible {
-                app.show(false);
+                app.show();
             }
         }
         WM_DPICHANGED => {
@@ -891,7 +940,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         TRAY => {
             if lp.0 as u32 == WM_LBUTTONUP {
                 if !app.visible {
-                    app.show(false);
+                    app.show();
                 }
             } else if lp.0 as u32 == WM_RBUTTONUP {
                 if let Ok(menu) = CreatePopupMenu() {
@@ -914,7 +963,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     if command == 2 {
                         let _ = PostMessageW(Some(hwnd), EXIT, WPARAM(0), LPARAM(0));
                     } else if command == 1 {
-                        app.show(false);
+                        app.show();
                     }
                 }
             }

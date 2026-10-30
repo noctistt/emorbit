@@ -23,8 +23,11 @@ There is no published stable release or installer yet.
 ## Controls
 
 * Focus a text field in Notepad first.
-* Hold Ctrl + Alt + Space, move over an emoji, then release Space to select. Release the other modifier keys too; insertion waits until they are up. Releasing in an empty region cancels.
-* Hover for 350 milliseconds over an emoji with variants to open its contextual arc. Move to the desired variant before releasing.
+* Tap Ctrl + Alt + Space and release the keys. The picker stays open. Releasing shortcut keys does not select an emoji.
+* Press and hold the primary mouse button in the centre or over an emoji, move onto the desired emoji, then release the mouse button to insert. A normal click also inserts.
+* Hover for 350 milliseconds over an emoji with variants to open its contextual arc. You can keep the mouse button held while exploring the arc; release over the desired variant to insert it.
+* Move back to the centre after pressing an emoji, or release outside the targets, to cancel. The unpinned picker closes on cancellation; the pinned picker stays open. A stationary centre click opens Search instead.
+* A drag passing over Pin, Close, or a page arrow does not activate it. Click those controls normally. The primary mouse button respects Windows' swapped button setting.
 * Click Search in the centre to latch the popup open and activate its text field. Type a query; results replace the wheel. Click a result or press Enter to insert the first result on the current page. The search box is limited to 255 UTF-16 units.
 * Scroll over the wheel, or click the arrows, to change result pages.
 * Click Pin to keep the wheel open. Click emojis while the external text field remains focused. Click Unpin to return to closing after selection.
@@ -40,6 +43,11 @@ Use a disposable text document. Record app and Windows versions and actual obser
 | Check | Expected result | Status |
 | --- | --- | --- |
 | Quick selection in Notepad | Complete emoji inserted once; popup closes | Pending Windows test |
+| Shortcut tap and key release | Picker stays open; no emoji inserted | Pending Windows test |
+| Mouse hold from centre to emoji | Mouse release inserts the final target exactly once | Pending Windows test |
+| Mouse hold from emoji to variant | Mouse release inserts that variant, not the initial emoji | Pending Windows test |
+| Mouse release outside the popup | Cancels without inserting the last highlighted emoji | Pending Windows test |
+| Drag across toolbar controls | Does not accidentally pin, close, or change pages | Pending Windows test |
 | Pinned wheel and continued typing | Emoji clicks leave the external field usable | Pending Windows test |
 | Pinned target switch | Selecting after switching windows inserts into the current focused destination | Pending Windows test |
 | Search then selection | Focus returns and the selected sequence inserts | Pending Windows test |
@@ -61,4 +69,4 @@ Pinned state, favorites, recents, positions, and preferred skin tones are not pe
 
 ## Resource measurements
 
-Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop; a 16 millisecond timer runs only during an active hold gesture or pending insertion. The hover timer is cancelled after it fires.
+Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop; a 16 millisecond timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. The hover timer is cancelled after it fires.
