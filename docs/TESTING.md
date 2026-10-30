@@ -26,6 +26,8 @@ There is no published stable release or installer yet.
 * Tap Ctrl + Alt + Space and release the keys. The picker stays open. Releasing shortcut keys does not select an emoji.
 * Press and hold the primary mouse button in the centre or over an emoji, move onto the desired emoji, then release the mouse button to insert. A normal click also inserts.
 * Hover for 350 milliseconds over an emoji with variants to open its contextual arc. You can keep the mouse button held while exploring the arc; release over the desired variant to insert it.
+* Suggestions now fan outward beside their parent emoji. Move back to the centre to dismiss the fan. While a fan is open, paging arrows and footer text are hidden to leave space for lower suggestions; use the mouse wheel to change pages.
+* Repeated choices show a small ×2 or ×3 badge instead of overflowing strings. The header previews the actual output on hover. Highlights fade and gently grow, and suggestions expand into position. Windows' client area animation preference is read at startup and on settings changes.
 * Move back to the centre after pressing an emoji, or release outside the targets, to cancel. The unpinned picker closes on cancellation; the pinned picker stays open. A stationary centre click opens Search instead.
 * A drag passing over Pin, Close, or a page arrow does not activate it. Click those controls normally. The primary mouse button respects Windows' swapped button setting.
 * Click Search in the centre to latch the popup open and activate its text field. Type a query; results replace the wheel. Click a result or press Enter to insert the first result on the current page. The search box is limited to 255 UTF-16 units.
@@ -48,6 +50,9 @@ Use a disposable text document. Record app and Windows versions and actual obser
 | Mouse hold from emoji to variant | Mouse release inserts that variant, not the initial emoji | Pending Windows test |
 | Mouse release outside the popup | Cancels without inserting the last highlighted emoji | Pending Windows test |
 | Drag across toolbar controls | Does not accidentally pin, close, or change pages | Pending Windows test |
+| Hover each of the eight home emojis | Suggestions appear near that emoji, including bottom and side positions | Pending Windows test |
+| Quick movement between emojis and variants | Smooth highlights with clickable targets matching their visible positions | Pending Windows test |
+| Disable Windows animations | Transitions snap to their endpoints without repeated animation frames | Pending Windows test |
 | Pinned wheel and continued typing | Emoji clicks leave the external field usable | Pending Windows test |
 | Pinned target switch | Selecting after switching windows inserts into the current focused destination | Pending Windows test |
 | Search then selection | Focus returns and the selected sequence inserts | Pending Windows test |
@@ -69,4 +74,4 @@ Pinned state, favorites, recents, positions, and preferred skin tones are not pe
 
 ## Resource measurements
 
-Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop; a 16 millisecond timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. The hover timer is cancelled after it fires.
+Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop. A 16 millisecond gesture timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. A separate animation timer runs only while finite highlight or expansion transitions are active and stops at rest. The hover timer is cancelled after it fires.

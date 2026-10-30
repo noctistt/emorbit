@@ -10,6 +10,10 @@ Releasing a gesture over Pin, Close, or a page arrow must not activate that cont
 
 A brief dwell opens a contextual outer arc. Movement through a segment should not immediately open another menu. Use forgiving pointer corridors and stable geometry so the submenu remains reachable.
 
+Suggestions form a local outward fan anchored to the parent emoji, rather than a fixed row above the wheel. The fan rotates with its parent and fits inside the existing popup. Dim other primary choices while it is open. Temporarily hide page arrows and footer text where a lower fan needs that space; the header shows the exact selected output and scrolling still changes pages. Returning to the centre dismisses the fan.
+
+Hover highlights transition through colour and slight size changes over about 140 milliseconds; suggestion fans expand over about 180 milliseconds. Rendering and hit testing share the animated positions. Use finite transitions, stop the animation timer at rest, and respect Windows' client area animation preference. Repeated output uses a single emoji with a compact ×2 or ×3 badge, with the complete output previewed in the header.
+
 ## Contextual choices
 
 Expression choices can expose related expressions and explicit single, double, or triple repetition. Supported person and hand sequences can expose skin tones. Unsupported combinations must never be synthesized. More complex sequences require valid Unicode data.

@@ -13,6 +13,8 @@ The prototype uses windows 0.62.2 and windows-numerics 0.3.1 with Cargo.lock com
 
 The current popup is event driven and rendered with Direct2D and DirectWrite. Pure catalog, Unicode encoding, and wheel geometry logic live in the library. The native application lives in platform.rs. Its boxed RefCell state outlives the native window; callbacks guard against synchronous reentrancy and defer size refreshes when necessary. The native layer remains a prototype requiring interactive validation.
 
+Pure finite transitions live in motion.rs. A short animation timer advances highlight colour/size and local fan expansion, invalidates the window, and stops when all transitions settle. The renderer and hit tester use the same parent anchored fan geometry and expansion progress. Other primary items are dimmed behind an open fan. Animation disablement snaps all transitions and stops the timer. No animation thread, continuous frame loop, or additional dependency is introduced.
+
 ## Suggested boundaries
 
 Keep geometry and hit testing, interaction state, emoji sequences and search, preferences, Windows focus and insertion, and rendering separate. Pure logic should be testable without Windows.

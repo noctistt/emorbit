@@ -6,7 +6,7 @@ EmOrbit is a lightweight Windows emoji picker being built around a radial dial. 
 
 ## Project status
 
-Experimental native prototype. The first implementation includes a radial wheel, contextual choices, local search, paging, pinning, a tray icon, and guarded Unicode insertion. It has a small catalog of 24 entries. Live compatibility, appearance, and resource use still require Windows testing. There is no stable release yet.
+Experimental native prototype. The implementation includes a radial wheel, parent anchored suggestion fans, animated highlights, local search, paging, pinning, a tray icon, and guarded Unicode insertion. It has a small catalog of 24 entries. Early user testing confirmed emoji insertion and mouse release selection; broader compatibility, visual polish, and resource use still require Windows testing. There is no stable release yet.
 
 See [running and testing](docs/TESTING.md) for build instructions, controls, CI artifacts, and known limitations. The list below describes the full intended product, including features not implemented yet.
 

@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod motion;
 pub mod wheel;
 
 /// Windows Unicode injection uses UTF-16 code units, including surrogate pairs

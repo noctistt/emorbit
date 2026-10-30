@@ -2,6 +2,15 @@ pub const WIDTH: f32 = 440.0;
 pub const HEIGHT: f32 = 520.0;
 pub const CENTER: Point = Point { x: 220.0, y: 285.0 };
 pub const ITEM_RADIUS: f32 = 32.0;
+pub const ORBIT_RADIUS: f32 = 100.0;
+pub const VARIANT_RADIUS: f32 = 22.0;
+
+#[derive(Clone, Copy, Debug)]
+pub struct ContextLayout {
+    pub anchor: usize,
+    pub count: usize,
+    pub progress: f32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point {
@@ -44,18 +53,27 @@ pub fn release_target(pressed: Hit, released: Hit) -> Option<Hit> {
 pub fn item_position(index: usize) -> Point {
     let angle = -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::FRAC_PI_4;
     Point {
-        x: CENTER.x + angle.cos() * 112.0,
-        y: CENTER.y + angle.sin() * 112.0,
+        x: CENTER.x + angle.cos() * ORBIT_RADIUS,
+        y: CENTER.y + angle.sin() * ORBIT_RADIUS,
     }
 }
 
-pub fn variant_position(index: usize, count: usize) -> Point {
-    // Stable outer arc above the main wheel, kept inside the popup work area.
-    let angle =
-        std::f32::consts::PI + (index as f32 + 0.5) * std::f32::consts::PI / count.max(1) as f32;
+pub fn variant_position(layout: ContextLayout, index: usize) -> Point {
+    // A local outward fan follows the parent around the wheel. The full layout
+    // fits within the existing popup, including bottom and side parents.
+    let parent = item_position(layout.anchor);
+    let direction = (parent.y - CENTER.y).atan2(parent.x - CENTER.x);
+    let spread = 160.0_f32.to_radians();
+    let offset = if layout.count <= 1 {
+        0.0
+    } else {
+        (index as f32 / (layout.count - 1) as f32 - 0.5) * spread
+    };
+    let angle = direction + offset;
+    let distance = 72.0 + 14.0 * layout.progress.clamp(0.0, 1.0);
     Point {
-        x: CENTER.x + angle.cos() * 180.0,
-        y: CENTER.y + angle.sin() * 180.0,
+        x: parent.x + angle.cos() * distance,
+        y: parent.y + angle.sin() * distance,
     }
 }
 
@@ -63,7 +81,7 @@ fn inside(point: Point, centre: Point, radius: f32) -> bool {
     (point.x - centre.x).powi(2) + (point.y - centre.y).powi(2) <= radius.powi(2)
 }
 
-pub fn hit_test(point: Point, items: usize, variants: usize) -> Hit {
+pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> Hit {
     if (12.0..48.0).contains(&point.y) {
         if (340.0..380.0).contains(&point.x) {
             return Hit::Pin;
@@ -75,20 +93,28 @@ pub fn hit_test(point: Point, items: usize, variants: usize) -> Hit {
             return Hit::Drag;
         }
     }
-    for index in 0..variants {
-        if inside(point, variant_position(index, variants), 29.0) {
-            return Hit::Variant(index);
+    if let Some(layout) = context {
+        // Hit regions follow the same expanding positions as rendering.
+        if layout.progress > 0.05 {
+            let radius = VARIANT_RADIUS * (0.75 + 0.25 * layout.progress) + 2.0;
+            for index in 0..layout.count {
+                if inside(point, variant_position(layout, index), radius) {
+                    return Hit::Variant(index);
+                }
+            }
         }
     }
     for index in 0..items.min(8) {
-        if inside(point, item_position(index), ITEM_RADIUS) {
+        if inside(point, item_position(index), ITEM_RADIUS + 3.0) {
             return Hit::Item(index);
         }
     }
     if inside(point, CENTER, 47.0) {
         return Hit::Search;
     }
-    if (440.0..478.0).contains(&point.y) {
+    // The local fan can use the bottom region; do not leave invisible page
+    // controls active underneath it. Scrolling still changes result pages.
+    if context.is_none() && (440.0..478.0).contains(&point.y) {
         if (100.0..160.0).contains(&point.x) {
             return Hit::Previous;
         }
@@ -147,13 +173,77 @@ mod tests {
     #[test]
     fn every_visible_target_is_reachable() {
         for i in 0..8 {
-            assert_eq!(hit_test(item_position(i), 8, 0), Hit::Item(i));
+            assert_eq!(hit_test(item_position(i), 8, None), Hit::Item(i));
         }
-        for i in 0..6 {
-            assert_eq!(hit_test(variant_position(i, 6), 8, 6), Hit::Variant(i));
+        for anchor in 0..8 {
+            let layout = ContextLayout {
+                anchor,
+                count: 6,
+                progress: 1.0,
+            };
+            for i in 0..6 {
+                assert_eq!(
+                    hit_test(variant_position(layout, i), 8, Some(layout)),
+                    Hit::Variant(i)
+                );
+            }
         }
-        assert_eq!(hit_test(CENTER, 8, 0), Hit::Search);
-        assert_eq!(hit_test(item_position(7), 2, 0), Hit::None);
+        assert_eq!(hit_test(CENTER, 8, None), Hit::Search);
+        assert_eq!(hit_test(item_position(7), 2, None), Hit::None);
+    }
+
+    #[test]
+    fn fans_are_local_outward_and_inside_popup_for_every_parent() {
+        for anchor in 0..8 {
+            let parent = item_position(anchor);
+            for progress in [0.0, 0.25, 0.5, 1.0] {
+                let layout = ContextLayout {
+                    anchor,
+                    count: 6,
+                    progress,
+                };
+                let points: Vec<_> = (0..6).map(|i| variant_position(layout, i)).collect();
+                for p in &points {
+                    assert!((p.x - parent.x).hypot(p.y - parent.y) <= 86.01);
+                    assert!(
+                        p.x - VARIANT_RADIUS - 2.0 >= 0.0 && p.x + VARIANT_RADIUS + 2.0 <= WIDTH
+                    );
+                    assert!(
+                        p.y - VARIANT_RADIUS - 2.0 >= 72.0 && p.y + VARIANT_RADIUS + 2.0 <= HEIGHT
+                    );
+                    assert!(
+                        (p.x - parent.x) * (parent.x - CENTER.x)
+                            + (p.y - parent.y) * (parent.y - CENTER.y)
+                            > 0.0
+                    );
+                }
+                let diameter = 2.0 * VARIANT_RADIUS * (0.75 + 0.25 * progress);
+                for pair in points.windows(2) {
+                    assert!((pair[0].x - pair[1].x).hypot(pair[0].y - pair[1].y) > diameter);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn animated_targets_match_their_visible_positions_and_hide_paging() {
+        for progress in [0.1, 0.4, 0.8, 1.0] {
+            let layout = ContextLayout {
+                anchor: 4,
+                count: 6,
+                progress,
+            };
+            for index in 0..6 {
+                assert_eq!(
+                    hit_test(variant_position(layout, index), 8, Some(layout)),
+                    Hit::Variant(index)
+                );
+            }
+            assert_ne!(
+                hit_test(Point { x: 130.0, y: 460.0 }, 8, Some(layout)),
+                Hit::Previous
+            );
+        }
     }
 
     #[test]

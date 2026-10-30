@@ -2,6 +2,7 @@
 //! The boxed App outlives its HWND; GWLP_USERDATA is cleared before it is freed.
 use emorbit::{
     catalog::{self, CATALOG},
+    motion::Motion,
     unicode_units,
     wheel::{self, Hit, Point},
 };
@@ -12,7 +13,7 @@ use std::{
     time::Instant,
 };
 use windows::{
-    core::{w, Error, Result, PCWSTR},
+    core::{w, Error, Result, BOOL, PCWSTR},
     Win32::{
         Foundation::*,
         Graphics::{
@@ -22,8 +23,12 @@ use windows::{
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Accessibility::*, Controls::EM_SETLIMITTEXT, HiDpi::*, Input::KeyboardAndMouse::*,
-            Shell::*, WindowsAndMessaging::*,
+            Accessibility::*,
+            Controls::{EM_SETLIMITTEXT, WM_MOUSELEAVE},
+            HiDpi::*,
+            Input::KeyboardAndMouse::*,
+            Shell::*,
+            WindowsAndMessaging::*,
         },
     },
 };
@@ -33,6 +38,7 @@ const HOTKEY: i32 = 1;
 const ESCAPE_KEY: i32 = 2;
 const TICK: usize = 1;
 const DWELL: usize = 2;
+const ANIMATE: usize = 3;
 const TRAY: u32 = WM_APP + 1;
 const FOREGROUND: u32 = WM_APP + 2;
 const SHOW: u32 = WM_APP + 3;
@@ -99,6 +105,10 @@ struct App {
     page: usize,
     hover: Hit,
     context: Option<usize>,
+    motion: Motion,
+    motion_running: bool,
+    motion_enabled: bool,
+    last_frame: Instant,
     status: String,
     pending: Option<Pending>,
     dpi: u32,
@@ -120,6 +130,10 @@ impl App {
             page: 0,
             hover: Hit::None,
             context: None,
+            motion: Motion::default(),
+            motion_running: false,
+            motion_enabled: true,
+            last_frame: Instant::now(),
             status: "Tap Ctrl + Alt + Space to open".into(),
             pending: None,
             dpi: 96,
@@ -132,6 +146,100 @@ impl App {
     }
     fn variants(&self) -> &'static [&'static str] {
         self.context.map_or(&[], |i| CATALOG[i].variants)
+    }
+    fn context_layout(&self) -> Option<wheel::ContextLayout> {
+        let index = self.context?;
+        Some(wheel::ContextLayout {
+            anchor: self.items().iter().position(|item| *item == index)?,
+            count: self.variants().len(),
+            progress: self.motion.expansion.value,
+        })
+    }
+
+    unsafe fn animate(&mut self) {
+        let anchor = self.context_layout().map(|layout| layout.anchor);
+        for (index, item) in self.motion.items.iter_mut().enumerate() {
+            let target = if self.hover == Hit::Item(index) {
+                1.0
+            } else if anchor == Some(index) {
+                0.55
+            } else {
+                0.0
+            };
+            item.target(target, 0.14);
+        }
+        for (index, variant) in self.motion.variants.iter_mut().enumerate() {
+            variant.target(
+                if self.hover == Hit::Variant(index) {
+                    1.0
+                } else {
+                    0.0
+                },
+                0.12,
+            );
+        }
+        self.motion
+            .search
+            .target(if self.hover == Hit::Search { 1.0 } else { 0.0 }, 0.14);
+        if !self.motion_enabled {
+            self.motion.snap();
+            let _ = KillTimer(Some(self.hwnd), ANIMATE);
+            self.motion_running = false;
+        } else if self.motion.active() && !self.motion_running && self.visible {
+            self.last_frame = Instant::now();
+            self.motion_running = SetTimer(Some(self.hwnd), ANIMATE, 16, None) != 0;
+            if !self.motion_running {
+                self.motion.snap();
+            }
+        }
+        self.invalidate();
+    }
+
+    unsafe fn animation_frame(&mut self) {
+        let now = Instant::now();
+        self.motion
+            .advance(now.duration_since(self.last_frame).as_secs_f32());
+        self.last_frame = now;
+        if !self.motion.active() || !self.visible {
+            let _ = KillTimer(Some(self.hwnd), ANIMATE);
+            self.motion_running = false;
+        }
+        // Recompute animated hit regions during an active drag only. Idle
+        // mouse hover is event driven, so a settled wheel does not poll.
+        if self.mouse_origin.is_some() {
+            self.refresh_pointer();
+        }
+        self.invalidate();
+    }
+
+    unsafe fn set_context(&mut self, index: Option<usize>) {
+        if self.context == index {
+            return;
+        }
+        self.context = index;
+        self.motion.expansion.reset(0.0);
+        for variant in &mut self.motion.variants {
+            variant.reset(0.0);
+        }
+        if index.is_some() {
+            self.motion.expansion.target(1.0, 0.18);
+        }
+        self.animate();
+    }
+
+    unsafe fn motion_preference(&mut self) {
+        let mut enabled = BOOL(1);
+        if SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some((&mut enabled as *mut BOOL).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_ok()
+        {
+            self.motion_enabled = enabled.as_bool();
+        }
+        self.animate();
     }
     fn selection(&self, hit: Hit) -> Option<&'static str> {
         match hit {
@@ -151,6 +259,7 @@ impl App {
         self.searching = false;
         self.hover = Hit::None;
         self.context = None;
+        self.motion = Motion::default();
         self.page = 0;
         self.results = catalog::search("");
         self.status = "Hold mouse · move · release to select".into();
@@ -205,6 +314,8 @@ impl App {
         self.visible = false;
         self.mouse_origin = None;
         self.context = None;
+        let _ = KillTimer(Some(self.hwnd), ANIMATE);
+        self.motion_running = false;
         let _ = KillTimer(Some(self.hwnd), DWELL);
         if self.pending.is_none() {
             let _ = KillTimer(Some(self.hwnd), TICK);
@@ -226,7 +337,7 @@ impl App {
         self.searching = true;
         self.results = catalog::search("");
         self.page = 0;
-        self.context = None;
+        self.set_context(None);
         self.status = "Type to search · Enter inserts first result".into();
         SetWindowLongPtrW(
             self.hwnd,
@@ -276,9 +387,9 @@ impl App {
         let count = GetWindowTextW(self.edit, &mut text);
         self.results = catalog::search(&String::from_utf16_lossy(&text[..count.max(0) as usize]));
         self.page = 0;
-        self.context = None;
+        self.set_context(None);
         self.hover = Hit::None;
-        self.invalidate();
+        self.animate();
     }
 
     unsafe fn choose(&mut self, text: &str) {
@@ -435,7 +546,7 @@ impl App {
     }
 
     unsafe fn pointer(&mut self, point: Point) {
-        let hit = wheel::hit_test(point, self.items().len(), self.variants().len());
+        let hit = wheel::hit_test(point, self.items().len(), self.context_layout());
         if hit == self.hover {
             return;
         }
@@ -449,13 +560,16 @@ impl App {
             {
                 SetTimer(Some(self.hwnd), DWELL, 350, None);
             } else {
-                self.context = None;
+                self.set_context(None);
             }
+        }
+        if hit == Hit::Search {
+            self.set_context(None);
         }
         if let Some(text) = self.selection(hit) {
             self.status = format!("Select {text}");
         }
-        self.invalidate();
+        self.animate();
     }
 
     unsafe fn click(&mut self) {
@@ -493,10 +607,10 @@ impl App {
     unsafe fn change_page(&mut self, delta: i32) {
         let count = catalog::page_count(&self.results) as i32;
         self.page = (self.page as i32 + delta).rem_euclid(count) as usize;
-        self.context = None;
+        self.set_context(None);
         self.hover = Hit::None;
         let _ = KillTimer(Some(self.hwnd), DWELL);
-        self.invalidate();
+        self.animate();
     }
 
     unsafe fn paint(&mut self) -> Result<()> {
@@ -524,6 +638,14 @@ fn color(rgb: u32) -> D2D1_COLOR_F {
         b: (rgb & 255) as f32 / 255.0,
         a: 1.0,
     }
+}
+fn blend(from: u32, to: u32, t: f32) -> u32 {
+    let t = t.clamp(0.0, 1.0);
+    [16, 8, 0].into_iter().fold(0, |rgb, shift| {
+        let a = ((from >> shift) & 255) as f32;
+        let b = ((to >> shift) & 255) as f32;
+        rgb | (((a + (b - a) * t).round() as u32) << shift)
+    })
 }
 fn rect(x: f32, y: f32, width: f32, height: f32) -> D2D_RECT_F {
     D2D_RECT_F {
@@ -580,7 +702,19 @@ impl Graphics {
     }
 
     unsafe fn label(&self, text: &str, bounds: D2D_RECT_F, format: &IDWriteTextFormat, rgb: u32) {
+        self.label_alpha(text, bounds, format, rgb, 1.0);
+    }
+
+    unsafe fn label_alpha(
+        &self,
+        text: &str,
+        bounds: D2D_RECT_F,
+        format: &IDWriteTextFormat,
+        rgb: u32,
+        alpha: f32,
+    ) {
         self.brush.SetColor(&color(rgb));
+        self.brush.SetOpacity(alpha);
         self.target.DrawText(
             &unicode_units(text),
             format,
@@ -592,7 +726,12 @@ impl Graphics {
     }
 
     unsafe fn circle(&self, point: Point, radius: f32, rgb: u32) {
+        self.circle_alpha(point, radius, rgb, 1.0);
+    }
+
+    unsafe fn circle_alpha(&self, point: Point, radius: f32, rgb: u32, alpha: f32) {
         self.brush.SetColor(&color(rgb));
+        self.brush.SetOpacity(alpha);
         self.target.FillEllipse(
             &D2D1_ELLIPSE {
                 point: Vector2 {
@@ -623,21 +762,26 @@ impl Graphics {
         );
         self.label("×", rect(388.0, 12.0, 40.0, 36.0), &self.text, 0xaaaabb);
         self.label(
-            "NATIVE PROTOTYPE",
-            rect(140.0, 48.0, 160.0, 24.0),
+            if app.context.is_some() {
+                &app.status
+            } else {
+                "HOLD · MOVE · RELEASE"
+            },
+            rect(12.0, 48.0, 416.0, 24.0),
             &self.small,
             0x83869d,
         );
         // A subtle orbit joins the individual emoji targets.
         self.brush.SetColor(&color(0x303345));
+        self.brush.SetOpacity(1.0);
         self.target.DrawEllipse(
             &D2D1_ELLIPSE {
                 point: Vector2 {
                     X: wheel::CENTER.x,
                     Y: wheel::CENTER.y,
                 },
-                radiusX: 112.0,
-                radiusY: 112.0,
+                radiusX: wheel::ORBIT_RADIUS,
+                radiusY: wheel::ORBIT_RADIUS,
             },
             &self.brush,
             1.5,
@@ -645,46 +789,82 @@ impl Graphics {
         );
         for (slot, index) in app.items().iter().enumerate() {
             let p = wheel::item_position(slot);
-            let selected = app.hover == Hit::Item(slot);
-            self.circle(p, 34.0, if selected { 0x8060d8 } else { 0x292c3e });
+            let highlight = app.motion.items[slot].value;
+            let radius = wheel::ITEM_RADIUS + 3.0 * highlight;
+            self.circle_alpha(p, radius + 7.0, 0xa084fa, 0.11 * highlight);
+            self.circle(p, radius, blend(0x292c3e, 0x8060d8, highlight));
             self.label(
                 CATALOG[*index].text,
                 rect(p.x - 32.0, p.y - 32.0, 64.0, 64.0),
                 &self.emoji,
                 0xffffff,
             );
+            if app.context.is_some_and(|anchor| anchor != *index) {
+                self.circle_alpha(p, radius + 1.0, 0x13151f, 0.58 * app.motion.expansion.value);
+            }
         }
         let variants = app.variants();
-        for (slot, value) in variants.iter().enumerate() {
-            let p = wheel::variant_position(slot, variants.len());
-            self.circle(
-                p,
-                29.0,
-                if app.hover == Hit::Variant(slot) {
-                    0x8060d8
-                } else {
-                    0x353049
-                },
-            );
-            self.label(
-                value,
-                rect(p.x - 29.0, p.y - 26.0, 58.0, 52.0),
-                if value.chars().count() > 2 {
-                    &self.text
-                } else {
-                    &self.emoji
-                },
-                0xffffff,
-            );
+        if let Some(layout) = app.context_layout() {
+            let parent = wheel::item_position(layout.anchor);
+            let base = CATALOG[app.context.unwrap()].text;
+            for (slot, value) in variants.iter().enumerate() {
+                let p = wheel::variant_position(layout, slot);
+                let highlight = app.motion.variants[slot].value;
+                let expansion = app.motion.expansion.value;
+                let radius = wheel::VARIANT_RADIUS * (0.75 + 0.25 * expansion) + 2.0 * highlight;
+                self.brush.SetColor(&color(0x766296));
+                self.brush.SetOpacity(0.20 * expansion);
+                let distance = (p.x - parent.x).hypot(p.y - parent.y);
+                let dx = (p.x - parent.x) / distance;
+                let dy = (p.y - parent.y) / distance;
+                self.target.DrawLine(
+                    Vector2 {
+                        X: parent.x + dx * 37.0,
+                        Y: parent.y + dy * 37.0,
+                    },
+                    Vector2 {
+                        X: p.x - dx * (radius + 2.0),
+                        Y: p.y - dy * (radius + 2.0),
+                    },
+                    &self.brush,
+                    1.0,
+                    None,
+                );
+                self.circle_alpha(p, radius + 5.0, 0xb49aff, 0.12 * highlight * expansion);
+                self.circle_alpha(p, radius, blend(0x353049, 0x8962e6, highlight), expansion);
+                if expansion > 0.08 {
+                    // Repeated output is shown as one emoji and a compact badge,
+                    // so it stays inside the bubble. The header previews the
+                    // actual complete sequence when selected.
+                    let repeated = (2..=3).find(|count| *value == base.repeat(*count));
+                    self.label_alpha(
+                        if repeated.is_some() { base } else { value },
+                        rect(p.x - 22.0, p.y - 22.0, 44.0, 44.0),
+                        &self.emoji,
+                        0xffffff,
+                        expansion,
+                    );
+                    if let Some(count) = repeated {
+                        let badge = Point {
+                            x: p.x + 16.0,
+                            y: p.y + 16.0,
+                        };
+                        self.circle_alpha(badge, 11.0, 0x1d192c, expansion);
+                        self.label_alpha(
+                            &format!("×{count}"),
+                            rect(badge.x - 12.0, badge.y - 10.0, 24.0, 20.0),
+                            &self.small,
+                            0xe2d5ff,
+                            expansion,
+                        );
+                    }
+                }
+            }
         }
         self.circle(
             wheel::CENTER,
             47.0,
-            if app.hover == Hit::Search {
-                0x66519d
-            } else {
-                0x373049
-            },
+            blend(0x373049, 0x66519d, app.motion.search.value),
         );
         if !app.searching {
             self.label(
@@ -702,20 +882,22 @@ impl Graphics {
                 0xb0aec0,
             );
         }
-        self.label("‹", rect(100.0, 440.0, 60.0, 38.0), &self.text, 0xc5b8ed);
-        self.label(
-            &format!("{} / {}", app.page + 1, catalog::page_count(&app.results)),
-            rect(160.0, 440.0, 120.0, 38.0),
-            &self.small,
-            0xa9a6ba,
-        );
-        self.label("›", rect(280.0, 440.0, 60.0, 38.0), &self.text, 0xc5b8ed);
-        self.label(
-            &app.status,
-            rect(12.0, 484.0, 416.0, 24.0),
-            &self.small,
-            0xb7afcd,
-        );
+        if app.context.is_none() {
+            self.label("‹", rect(100.0, 440.0, 60.0, 38.0), &self.text, 0xc5b8ed);
+            self.label(
+                &format!("{} / {}", app.page + 1, catalog::page_count(&app.results)),
+                rect(160.0, 440.0, 120.0, 38.0),
+                &self.small,
+                0xa9a6ba,
+            );
+            self.label("›", rect(280.0, 440.0, 60.0, 38.0), &self.text, 0xc5b8ed);
+            self.label(
+                &app.status,
+                rect(12.0, 484.0, 416.0, 24.0),
+                &self.small,
+                0xb7afcd,
+            );
+        }
         self.target.EndDraw(None, None)
     }
 }
@@ -824,10 +1006,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
         }
         WM_MOUSEMOVE => {
+            let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            });
             let scale = app.dpi as f32 / 96.0;
             app.pointer(Point {
                 x: (lp.0 as u16 as i16) as f32 / scale,
                 y: ((lp.0 >> 16) as u16 as i16) as f32 / scale,
+            });
+        }
+        WM_MOUSELEAVE if app.mouse_origin.is_none() => {
+            app.set_context(None);
+            app.pointer(Point {
+                x: -100.0,
+                y: -100.0,
             });
         }
         WM_LBUTTONDOWN if app.hover == Hit::Drag => {
@@ -851,13 +1046,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             1
         }),
         WM_TIMER if wp.0 == TICK => app.tick(),
+        WM_TIMER if wp.0 == ANIMATE => app.animation_frame(),
         WM_TIMER if wp.0 == DWELL => {
             let _ = KillTimer(Some(hwnd), DWELL);
             if let Hit::Item(i) = app.hover {
-                app.context = app.items().get(i).copied();
-                app.invalidate();
+                app.set_context(app.items().get(i).copied());
             }
         }
+        WM_SETTINGCHANGE => app.motion_preference(),
         WM_COMMAND if (wp.0 >> 16) as u32 == EN_CHANGE => app.changed_search(),
         SEARCH_ENTER => {
             if let Some(index) = app.items().first() {
@@ -1019,6 +1215,7 @@ pub fn run() -> Result<()> {
             Some((&*app as *const RefCell<App>).cast()),
         )?;
         state.hwnd = hwnd;
+        state.motion_preference();
         WINDOW.store(hwnd.0, Ordering::Relaxed);
         // Install callbacks only after every fallible setup step is complete.
         let setup = (|| -> Result<()> {
