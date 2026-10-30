@@ -2,6 +2,7 @@
 //! The boxed App outlives its HWND; GWLP_USERDATA is cleared before it is freed.
 use emorbit::{
     catalog::{self, CATALOG},
+    favorites::Favorites,
     motion::Motion,
     unicode_units,
     wheel::{self, Hit, Point},
@@ -135,6 +136,11 @@ struct App {
     smooth: bool,
     mouse_origin: Option<Hit>,
     searching: bool,
+    adding_favorite: bool,
+    favorites_mode: bool,
+    favorites: Favorites,
+    edge_pager: wheel::EdgePager,
+    gesture_paged: bool,
     destination: Option<Destination>,
     results: Vec<usize>,
     page: usize,
@@ -165,6 +171,11 @@ impl App {
             smooth: true,
             mouse_origin: None,
             searching: false,
+            adding_favorite: false,
+            favorites_mode: false,
+            favorites: Favorites::default(),
+            edge_pager: wheel::EdgePager::default(),
+            gesture_paged: false,
             destination: None,
             results: catalog::search(""),
             page: 0,
@@ -184,13 +195,154 @@ impl App {
     fn items(&self) -> &[usize] {
         catalog::page(&self.results, self.page)
     }
+    fn item_text(&self, index: usize) -> &str {
+        if let Some(emoji) = CATALOG.get(index) {
+            emoji.text
+        } else {
+            self.favorites
+                .items
+                .get(index - CATALOG.len())
+                .map_or("", String::as_str)
+        }
+    }
+    fn search_results(&self, query: &str) -> Vec<usize> {
+        if !self.favorites_mode {
+            return catalog::search(query);
+        }
+        let query = query.trim().to_lowercase();
+        self.favorites
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, text)| {
+                let words = CATALOG.iter().find(|e| e.text == text).map_or_else(
+                    || text.clone(),
+                    |e| format!("{} {} {}", text, e.name, e.keywords),
+                );
+                query
+                    .split_whitespace()
+                    .all(|q| words.to_lowercase().contains(q))
+                    .then_some(CATALOG.len() + i)
+            })
+            .collect()
+    }
+    fn favorites_path() -> Option<std::path::PathBuf> {
+        std::env::var_os("LOCALAPPDATA").map(|p| {
+            std::path::PathBuf::from(p)
+                .join("EmOrbit")
+                .join("favorites.txt")
+        })
+    }
+    unsafe fn toggle_favorite(&mut self, text: &str, remove: bool) {
+        let previous = self.favorites.clone();
+        if remove {
+            self.favorites.remove(text);
+        } else if let Err(error) = self.favorites.add(text) {
+            self.status = error.into();
+            self.invalidate();
+            return;
+        }
+        let result = Self::favorites_path()
+            .ok_or_else(|| std::io::Error::other("Local app data is unavailable"))
+            .and_then(|path| self.favorites.save(&path));
+        if let Err(error) = result {
+            self.favorites = previous;
+            self.status = format!("Could not save favorites: {error}");
+        } else {
+            self.status = if remove {
+                "Favorite removed"
+            } else {
+                "Favorite saved"
+            }
+            .into();
+        }
+        self.results = self.search_results("");
+        self.page = 0;
+        self.set_context(None);
+        self.hover = Hit::None;
+        self.invalidate();
+    }
+    unsafe fn favorite_menu(&mut self) {
+        self.mouse_origin = None;
+        if self.pending.is_none() {
+            let _ = KillTimer(Some(self.hwnd), TICK);
+        }
+        self.refresh_pointer();
+        let Some(text) = self.selection(self.hover) else {
+            return;
+        };
+        let Ok(menu) = CreatePopupMenu() else {
+            return;
+        };
+        self.mouse_origin = None;
+        let target = Destination::capture(self.hwnd).or(self.destination);
+        let remove = self.favorites.contains(&text);
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING,
+            1,
+            if remove {
+                w!("Remove from favorites")
+            } else {
+                w!("Save to favorites")
+            },
+        );
+        let mut cursor = POINT::default();
+        let _ = GetCursorPos(&mut cursor);
+        let _ = SetForegroundWindow(self.hwnd);
+        let command = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            cursor.x,
+            cursor.y,
+            Some(0),
+            self.hwnd,
+            None,
+        )
+        .0;
+        let _ = DestroyMenu(menu);
+        if let Some(target) = target {
+            let _ = SetForegroundWindow(target.window);
+        }
+        if command == 1 {
+            self.toggle_favorite(&text, remove);
+        }
+    }
+    unsafe fn begin_favorite(&mut self) {
+        if self.pending.is_some() {
+            return;
+        }
+        self.begin_search();
+        self.adding_favorite = true;
+        self.status = "Paste emoji or a combination · Enter saves".into();
+        self.position_edit();
+        self.invalidate();
+    }
+    unsafe fn save_favorite_entry(&mut self) {
+        let mut buffer = [0u16; 256];
+        let count = GetWindowTextW(self.edit, &mut buffer).max(0) as usize;
+        let text = String::from_utf16_lossy(&buffer[..count]);
+        let mut probe = self.favorites.clone();
+        if let Err(error) = probe.add(&text) {
+            self.status = error.into();
+            self.invalidate();
+            return;
+        }
+        self.end_search();
+        self.favorites_mode = true;
+        self.toggle_favorite(text.trim(), false);
+    }
+
     fn variants(&self) -> &[catalog::Suggestion] {
         &self.choices
     }
     fn context_layout(&self) -> Option<wheel::ContextLayout> {
         let index = self.context?;
         Some(wheel::ContextLayout {
-            anchor: self.items().iter().position(|item| *item == index)?,
+            anchor: self
+                .items()
+                .iter()
+                .position(|item| self.item_text(*item) == CATALOG[index].text)?,
             count: self.variants().len(),
             progress: self.motion.expansion.value,
         })
@@ -282,10 +434,13 @@ impl App {
         }
         self.animate();
     }
-    fn selection(&self, hit: Hit) -> Option<&'static str> {
+    fn selection(&self, hit: Hit) -> Option<String> {
         match hit {
-            Hit::Item(i) => self.items().get(i).map(|index| CATALOG[*index].text),
-            Hit::Variant(i) => self.variants().get(i).map(|s| s.text),
+            Hit::Item(i) => self
+                .items()
+                .get(i)
+                .map(|index| self.item_text(*index).to_owned()),
+            Hit::Variant(i) => self.variants().get(i).map(|s| s.text.to_owned()),
             _ => None,
         }
     }
@@ -381,7 +536,7 @@ impl App {
         self.choices.clear();
         self.motion = Motion::default();
         self.page = 0;
-        self.results = catalog::search("");
+        self.results = self.search_results("");
         self.status = "Hold mouse · move · release to select".into();
         let mut cursor = POINT::default();
         let _ = GetCursorPos(&mut cursor);
@@ -464,7 +619,8 @@ impl App {
         }
         let _ = KillTimer(Some(self.hwnd), TICK);
         self.searching = true;
-        self.results = catalog::search("");
+        self.adding_favorite = false;
+        self.results = self.search_results("");
         self.page = 0;
         self.set_context(None);
         self.status = "Type to search · Enter inserts first result".into();
@@ -479,8 +635,9 @@ impl App {
 
     unsafe fn position_edit(&self) {
         let s = self.dpi as f32 / 96.0;
+        let width = if self.adding_favorite { 240.0 } else { 94.0 };
         let mut point = POINT {
-            x: (173.0 * s) as i32,
+            x: ((wheel::CENTER.x - width / 2.0) * s) as i32,
             y: (269.0 * s) as i32,
         };
         let _ = ClientToScreen(self.hwnd, &mut point);
@@ -489,7 +646,7 @@ impl App {
             Some(HWND_TOPMOST),
             point.x,
             point.y,
-            (94.0 * s) as i32,
+            (width * s) as i32,
             (30.0 * s) as i32,
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
@@ -498,7 +655,7 @@ impl App {
             None,
             0,
             0,
-            (94.0 * s) as i32,
+            (width * s) as i32,
             (30.0 * s) as i32,
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
@@ -512,6 +669,7 @@ impl App {
     unsafe fn end_search(&mut self) {
         let restore = self.owns_search_focus();
         self.searching = false;
+        self.adding_favorite = false;
         let _ = ShowWindow(self.edit, SW_HIDE);
         let _ = ShowWindow(self.search_host, SW_HIDE);
         if restore {
@@ -524,9 +682,13 @@ impl App {
     }
 
     unsafe fn changed_search(&mut self) {
+        if self.adding_favorite {
+            return;
+        }
         let mut text = [0u16; 256];
         let count = GetWindowTextW(self.edit, &mut text);
-        self.results = catalog::search(&String::from_utf16_lossy(&text[..count.max(0) as usize]));
+        self.results =
+            self.search_results(&String::from_utf16_lossy(&text[..count.max(0) as usize]));
         self.page = 0;
         self.set_context(None);
         self.hover = Hit::None;
@@ -646,6 +808,8 @@ impl App {
     }
 
     unsafe fn begin_mouse(&mut self) {
+        self.edge_pager = wheel::EdgePager::default();
+        self.gesture_paged = false;
         if self.pending.is_some() {
             return;
         }
@@ -676,7 +840,7 @@ impl App {
             }
             self.hover = target;
             self.click();
-        } else if !self.pinned && !self.searching {
+        } else if !self.pinned && !self.searching && !self.gesture_paged {
             self.hide();
         } else {
             self.status = "Cancelled · hold mouse and move to choose".into();
@@ -685,15 +849,36 @@ impl App {
     }
 
     unsafe fn pointer(&mut self, point: Point) {
+        if matches!(
+            self.mouse_origin,
+            Some(Hit::Search | Hit::Item(_) | Hit::Variant(_) | Hit::None)
+        ) {
+            let primary = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+                VK_RBUTTON
+            } else {
+                VK_LBUTTON
+            };
+            if GetAsyncKeyState(primary.0 as i32) < 0 {
+                if let Some(direction) = self.edge_pager.update(point) {
+                    self.gesture_paged = true;
+                    self.change_page(direction);
+                }
+            }
+        }
         let hit = wheel::hit_test(point, self.items().len(), self.context_layout());
         if hit == self.hover {
             return;
         }
         self.hover = hit;
         if let Hit::Item(index) = hit {
-            let context = self.items().get(index).copied().filter(|i| {
-                !CATALOG[*i].variants.is_empty() || catalog::intensity(CATALOG[*i].text).is_some()
-            });
+            let context = self
+                .items()
+                .get(index)
+                .and_then(|i| CATALOG.iter().position(|e| e.text == self.item_text(*i)))
+                .filter(|i| {
+                    !CATALOG[*i].variants.is_empty()
+                        || catalog::intensity(CATALOG[*i].text).is_some()
+                });
             self.set_context(context);
         }
         if hit == Hit::Search {
@@ -711,12 +896,25 @@ impl App {
     }
 
     unsafe fn click(&mut self) {
+        if self.adding_favorite && matches!(self.hover, Hit::Item(_) | Hit::Variant(_)) {
+            return;
+        }
         if let Some(text) = self.selection(self.hover) {
-            self.choose(text);
+            self.choose(&text);
             return;
         }
         match self.hover {
             Hit::Search => self.begin_search(),
+            Hit::Favorites => {
+                self.end_search();
+                self.favorites_mode = !self.favorites_mode;
+                self.results = self.search_results("");
+                self.page = 0;
+                self.set_context(None);
+                self.hover = Hit::None;
+                self.invalidate();
+            }
+            Hit::AddFavorite => self.begin_favorite(),
             Hit::Pin => {
                 self.pinned = !self.pinned;
                 self.mouse_origin = None;
@@ -1040,26 +1238,43 @@ impl Graphics {
         } else {
             color(0x12131e)
         }));
-        // One compact toolbar replaces the disconnected header pills.
-        self.pill(rect(100.0, 12.0, 240.0, 36.0));
-        self.label(
-            "EmOrbit",
-            rect(108.0, 12.0, 122.0, 36.0),
-            &self.text,
-            0xf3f2ff,
-        );
-        self.label(
-            if app.pinned { "Unpin" } else { "Pin" },
-            rect(240.0, 12.0, 42.0, 36.0),
-            &self.small,
-            0xbca7ff,
-        );
-        self.label("×", rect(292.0, 12.0, 40.0, 36.0), &self.text, 0xaaaabb);
-        if matches!(app.hover, Hit::Variant(_)) {
-            self.pill(rect(90.0, 58.0, 260.0, 28.0));
+        // Keep the toolbar close to the dial; yield its area to expanded fans.
+        if app.context.is_none() {
+            self.pill(rect(70.0, 110.0, 300.0, 36.0));
+            self.label(
+                if app.favorites_mode {
+                    "Favorites"
+                } else {
+                    "EmOrbit"
+                },
+                rect(76.0, 110.0, 100.0, 36.0),
+                &self.text,
+                0xf3f2ff,
+            );
+            self.label(
+                "★",
+                rect(180.0, 110.0, 36.0, 36.0),
+                &self.text,
+                if app.favorites_mode {
+                    0xc5a6ff
+                } else {
+                    0xaaaabb
+                },
+            );
+            self.label("+", rect(220.0, 110.0, 36.0, 36.0), &self.text, 0xc5a6ff);
+            self.label(
+                if app.pinned { "Unpin" } else { "Pin" },
+                rect(264.0, 110.0, 42.0, 36.0),
+                &self.small,
+                0xbca7ff,
+            );
+            self.label("×", rect(320.0, 110.0, 40.0, 36.0), &self.text, 0xaaaabb);
+        }
+        if matches!(app.hover, Hit::Variant(_)) || app.adding_favorite {
+            self.pill(rect(90.0, 46.0, 260.0, 26.0));
             self.label(
                 &app.status,
-                rect(94.0, 58.0, 252.0, 28.0),
+                rect(94.0, 46.0, 252.0, 26.0),
                 &self.small,
                 0xe4d9ff,
             );
@@ -1087,12 +1302,15 @@ impl Graphics {
             self.circle_alpha(p, radius + 7.0, 0xa084fa, 0.11 * highlight);
             self.circle(p, radius, blend(0x292c3e, 0x8060d8, highlight));
             self.label(
-                CATALOG[*index].text,
+                app.item_text(*index),
                 rect(p.x - 32.0, p.y - 32.0, 64.0, 64.0),
                 &self.emoji,
                 0xffffff,
             );
-            if app.context.is_some_and(|anchor| anchor != *index) {
+            if app
+                .context
+                .is_some_and(|anchor| CATALOG[anchor].text != app.item_text(*index))
+            {
                 self.circle_alpha(p, radius + 1.0, 0x13151f, 0.58 * app.motion.expansion.value);
             }
         }
@@ -1198,22 +1416,49 @@ impl Graphics {
         }
         if app.results.is_empty() {
             self.label(
-                "No matches in the prototype catalog",
+                if app.favorites_mode {
+                    "No favorites found · use + to add"
+                } else {
+                    "No matches in the prototype catalog"
+                },
                 rect(50.0, 350.0, 340.0, 28.0),
                 &self.small,
                 0xb0aec0,
             );
         }
-        if app.context.is_none() {
-            self.pill(rect(100.0, 440.0, 240.0, 38.0));
-            self.label("‹", rect(100.0, 440.0, 60.0, 38.0), &self.text, 0xc5b8ed);
+        if app.context.is_none() && !app.adding_favorite {
+            for (x, text, hit) in [(20.0, "‹", Hit::Previous), (420.0, "›", Hit::Next)] {
+                self.circle(
+                    Point {
+                        x,
+                        y: wheel::CENTER.y,
+                    },
+                    18.0,
+                    if app.hover == hit { 0x66519d } else { 0x292c3e },
+                );
+                self.label(
+                    text,
+                    rect(x - 18.0, wheel::CENTER.y - 18.0, 36.0, 36.0),
+                    &self.text,
+                    0xe4d9ff,
+                );
+            }
+            self.pill(rect(188.0, 439.0, 64.0, 24.0));
             self.label(
                 &format!("{} / {}", app.page + 1, catalog::page_count(&app.results)),
-                rect(160.0, 440.0, 120.0, 38.0),
+                rect(188.0, 439.0, 64.0, 24.0),
                 &self.small,
                 0xa9a6ba,
             );
-            self.label("›", rect(280.0, 440.0, 60.0, 38.0), &self.text, 0xc5b8ed);
+        }
+        if app.status.starts_with("Favorite") || app.status.starts_with("Could not save") {
+            self.pill(rect(70.0, 474.0, 300.0, 28.0));
+            self.label(
+                &app.status,
+                rect(74.0, 474.0, 292.0, 28.0),
+                &self.small,
+                0xe4d9ff,
+            );
         }
         self.target.EndDraw(None, None)?;
         let center_x = self.surface.width as usize / 2;
@@ -1369,7 +1614,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_HOTKEY if wp.0 == ESCAPE_KEY as usize => {
             if app.searching {
                 app.end_search();
-                app.results = catalog::search("");
+                app.results = app.search_results("");
                 app.page = 0;
                 app.invalidate();
             } else {
@@ -1423,6 +1668,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_LBUTTONDOWN => app.begin_mouse(),
         WM_LBUTTONUP => app.finish_mouse(),
+        WM_RBUTTONUP if !app.searching => app.favorite_menu(),
         WM_MOUSEWHEEL => app.change_page(if ((wp.0 >> 16) as u16 as i16) > 0 {
             -1
         } else {
@@ -1434,13 +1680,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_SETTINGCHANGE => app.motion_preference(),
         WM_COMMAND if (wp.0 >> 16) as u32 == EN_CHANGE => app.changed_search(),
         SEARCH_ENTER => {
-            if let Some(index) = app.items().first() {
-                app.choose(CATALOG[*index].text);
+            if app.adding_favorite {
+                app.save_favorite_entry();
+            } else if let Some(index) = app.items().first() {
+                let text = app.item_text(*index).to_owned();
+                app.choose(&text);
             }
         }
         SEARCH_ESCAPE => {
             app.end_search();
-            app.results = catalog::search("");
+            app.results = app.search_results("");
             app.page = 0;
             app.invalidate();
         }
@@ -1607,7 +1856,14 @@ pub fn run() -> Result<()> {
         if RegisterClassW(&search_class) == 0 {
             return Err(Error::from_thread());
         }
-        let app = Box::new(RefCell::new(App::new()));
+        let mut initial = App::new();
+        if let Some(path) = App::favorites_path() {
+            match Favorites::load(&path) {
+                Ok(store) => initial.favorites = store,
+                Err(error) => diagnostic(&format!("Could not load favorites: {error}")),
+            }
+        }
+        let app = Box::new(RefCell::new(initial));
         // Hold the borrow during creation so synchronous setup messages cannot
         // access an incompletely initialized App.
         let mut state = app.borrow_mut();
@@ -1771,6 +2027,26 @@ mod tests {
     }
 
     #[test]
+    fn custom_favorites_are_selectable_and_known_ones_keep_their_variants() {
+        unsafe {
+            let mut app = App::new();
+            app.motion_enabled = false;
+            app.favorites.add("🫠").unwrap();
+            app.favorites.add("👍").unwrap();
+            app.favorites_mode = true;
+            app.results = app.search_results("");
+            assert_eq!(app.selection(Hit::Item(0)).as_deref(), Some("🫠"));
+            app.pointer(wheel::item_position(0));
+            assert!(app.context.is_none());
+            app.pointer(wheel::item_position(1));
+            assert_eq!(app.variants().len(), 6);
+            assert_eq!(app.context_layout().unwrap().anchor, 1);
+            app.results = app.search_results("thumb");
+            assert_eq!(app.selection(Hit::Item(0)).as_deref(), Some("👍"));
+        }
+    }
+
+    #[test]
     fn real_window_opens_renders_and_settles_after_reopening() {
         unsafe {
             let instance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
@@ -1881,7 +2157,7 @@ mod tests {
             assert_eq!(graphics.surface.alpha(0, 0), 0);
             assert_eq!(graphics.surface.alpha(5, 200), 0);
             assert!(
-                (100..114).any(|x| (12..26).any(|y| {
+                (70..84).any(|x| (110..124).any(|y| {
                     let alpha = graphics.surface.alpha(x, y);
                     alpha > 0 && alpha < 240
                 })),
@@ -1906,7 +2182,7 @@ mod tests {
                 .any(|s| s.text == "😭💔🥀" && s.label == Some("Saddest")));
             let layout = app.context_layout().unwrap();
             app.pointer(wheel::variant_position(layout, 5));
-            assert_eq!(app.selection(app.hover), Some("😭💔🥀"));
+            assert_eq!(app.selection(app.hover).as_deref(), Some("😭💔🥀"));
             assert!(app.status.starts_with("Saddest"));
             graphics.draw(&app).unwrap();
         }

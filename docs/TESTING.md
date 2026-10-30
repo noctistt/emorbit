@@ -83,7 +83,7 @@ The popup uses smooth alpha transparency with solid controls and pointer based p
 
 The destination check compares foreground window and focused control handles. It cannot distinguish every cursor or tab change inside a custom editor that reuses one native control. It does not read the target's document text. Input stops if the captured handles no longer match or modifiers remain held for two seconds. A failed or partial injection is reported without retrying the string.
 
-Pinned state, favorites, recents, positions, and preferred skin tones are not persisted yet. Keyboard navigation beyond search Enter and Escape and accessibility providers are not implemented. The standard Windows emoji shortcuts are left untouched. The app does not automatically retry tray registration after an Explorer restart yet.
+Favorites are saved locally; pinned state, recents, positions, and preferred skin tones are not persisted yet. Keyboard navigation beyond search Enter and Escape and accessibility providers are not implemented. The standard Windows emoji shortcuts are left untouched. The app does not automatically retry tray registration after an Explorer restart yet.
 
 ## Resource measurements
 
@@ -102,3 +102,13 @@ The toolbar is one compact rounded surface containing the title, pin control, an
 Native tests verify transparent gaps, fractional alpha around toolbar corners and glows, solid search/emoji controls, search icon pixels, normal reaction selection without a mode switch, and opening/reopening across smooth, compatible, and solid presentations. Pure tests verify automatic reaction mixing, named output, preserved skin tones, geometry, and UTF16 sequences.
 
 Startup and first frame diagnostics remain in `%LOCALAPPDATA%\EmOrbit\emorbit.log`, without searches or inserted text. The display check records only the observed color of the app's own center button.
+
+### Favorites and edge paging (0.1.9)
+
+★ toggles a separate favorites dial. + opens a native edit where you can paste an emoji or combination, including ones outside the 29 entry catalog, and press Enter to save it. Nothing is inserted into the external editor when saving. Right click an item or suggestion for Save to favorites; right click a saved item to remove it. Known emoji favorites retain their normal variants. Duplicate sequences are ignored. Favorites are stored in `%LOCALAPPDATA%\EmOrbit\favorites.txt` using an atomic replacement; a save error restores the prior in memory store and displays an error. The store supports 128 entries, each at most 128 UTF16 units, and rejects empty, control character, and ASCII only entries. It preserves Unicode sequences verbatim rather than enforcing the full Unicode emoji standard. Startup loads at most 64 KiB. Mode choice is session only.
+
+The toolbar is lowered to immediately above the main dial. It yields its space while suggestions expand so it cannot cover an upper fan; return to the center to dismiss the fan and access it. Left and right arrow buttons sit at the sides of the dial and yield to an active fan. A compact page count remains below.
+
+During a held selection gesture, entering the outer left or right edge turns one page. Each excursion turns only once; return through the central band before another turn. The same gesture can then select an item on the new page. Releasing at an edge turns no further pages, inserts nothing, and leaves the picker open. Clicking page buttons still turns exactly once. The gesture uses the existing active press timer and adds no idle polling.
+
+Tests cover favorite save/load/update/removal and Unicode preservation, arbitrary favorite selection, known favorite variants, side arrow hit regions, and one page per edge excursion. Windows still needs manual checks for favorite input focus, context menu dismissal, and held edge gestures on the affected display.

@@ -23,6 +23,8 @@ pub enum Hit {
     None,
     Search,
     Pin,
+    Favorites,
+    AddFavorite,
     Close,
     Previous,
     Next,
@@ -43,6 +45,8 @@ pub fn release_target(pressed: Hit, released: Hit) -> Option<Hit> {
         ) => Some(released),
         (Hit::Search, Hit::Search)
         | (Hit::Pin, Hit::Pin)
+        | (Hit::Favorites, Hit::Favorites)
+        | (Hit::AddFavorite, Hit::AddFavorite)
         | (Hit::Close, Hit::Close)
         | (Hit::Previous, Hit::Previous)
         | (Hit::Next, Hit::Next) => Some(released),
@@ -82,14 +86,21 @@ fn inside(point: Point, centre: Point, radius: f32) -> bool {
 }
 
 pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> Hit {
-    if (12.0..48.0).contains(&point.y) {
-        if (240.0..282.0).contains(&point.x) {
+    // The toolbar yields its space while the expanded fan is active.
+    if context.is_none() && (110.0..146.0).contains(&point.y) {
+        if (180.0..216.0).contains(&point.x) {
+            return Hit::Favorites;
+        }
+        if (220.0..256.0).contains(&point.x) {
+            return Hit::AddFavorite;
+        }
+        if (264.0..306.0).contains(&point.x) {
             return Hit::Pin;
         }
-        if (292.0..332.0).contains(&point.x) {
+        if (320.0..360.0).contains(&point.x) {
             return Hit::Close;
         }
-        if (100.0..234.0).contains(&point.x) {
+        if (70.0..174.0).contains(&point.x) {
             return Hit::Drag;
         }
     }
@@ -112,17 +123,59 @@ pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> H
     if inside(point, CENTER, 47.0) {
         return Hit::Search;
     }
-    // The local fan can use the bottom region; do not leave invisible page
-    // controls active underneath it. Scrolling still changes result pages.
-    if context.is_none() && (440.0..478.0).contains(&point.y) {
-        if (100.0..160.0).contains(&point.x) {
+    // Side arrows yield to suggestions that can occupy their space.
+    if context.is_none() {
+        if inside(
+            point,
+            Point {
+                x: 20.0,
+                y: CENTER.y,
+            },
+            18.0,
+        ) {
             return Hit::Previous;
         }
-        if (280.0..340.0).contains(&point.x) {
+        if inside(
+            point,
+            Point {
+                x: WIDTH - 20.0,
+                y: CENTER.y,
+            },
+            18.0,
+        ) {
             return Hit::Next;
         }
     }
     Hit::None
+}
+
+/// One turn per outward excursion. Return to the central band to rearm.
+pub struct EdgePager {
+    armed: bool,
+}
+impl Default for EdgePager {
+    fn default() -> Self {
+        Self { armed: true }
+    }
+}
+impl EdgePager {
+    pub fn update(&mut self, point: Point) -> Option<i32> {
+        if (100.0..340.0).contains(&point.x) {
+            self.armed = true;
+        }
+        if !self.armed || (point.y - CENTER.y).abs() > 160.0 {
+            return None;
+        }
+        let direction = if point.x <= 16.0 {
+            -1
+        } else if point.x >= WIDTH - 16.0 {
+            1
+        } else {
+            return None;
+        };
+        self.armed = false;
+        Some(direction)
+    }
 }
 
 pub fn clamp_origin(x: i32, y: i32, width: i32, height: i32, work: [i32; 4]) -> (i32, i32) {
@@ -244,6 +297,67 @@ mod tests {
                 Hit::Previous
             );
         }
+    }
+
+    #[test]
+    fn edge_paging_turns_once_then_requires_a_return_and_side_arrows_are_clickable() {
+        let mut pager = EdgePager::default();
+        assert_eq!(
+            pager.update(Point {
+                x: 450.0,
+                y: CENTER.y
+            }),
+            Some(1)
+        );
+        assert_eq!(
+            pager.update(Point {
+                x: 500.0,
+                y: CENTER.y
+            }),
+            None
+        );
+        assert_eq!(pager.update(CENTER), None);
+        assert_eq!(
+            pager.update(Point {
+                x: -20.0,
+                y: CENTER.y
+            }),
+            Some(-1)
+        );
+        assert_eq!(
+            pager.update(Point {
+                x: -50.0,
+                y: CENTER.y
+            }),
+            None
+        );
+        assert_eq!(
+            hit_test(
+                Point {
+                    x: 20.0,
+                    y: CENTER.y
+                },
+                8,
+                None
+            ),
+            Hit::Previous
+        );
+        assert_eq!(
+            hit_test(
+                Point {
+                    x: WIDTH - 20.0,
+                    y: CENTER.y
+                },
+                8,
+                None
+            ),
+            Hit::Next
+        );
+        assert_eq!(release_target(Hit::Item(0), Hit::AddFavorite), None);
+        assert_eq!(
+            release_target(Hit::Favorites, Hit::Favorites),
+            Some(Hit::Favorites)
+        );
     }
 
     #[test]

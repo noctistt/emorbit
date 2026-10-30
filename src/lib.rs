@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod favorites;
 pub mod motion;
 pub mod wheel;
 
