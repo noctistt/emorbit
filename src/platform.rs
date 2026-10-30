@@ -129,6 +129,7 @@ struct App {
     visible: bool,
     pinned: bool,
     transparent: bool,
+    intensity: bool,
     mouse_origin: Option<Hit>,
     searching: bool,
     destination: Option<Destination>,
@@ -157,6 +158,7 @@ impl App {
             visible: false,
             pinned: false,
             transparent: false,
+            intensity: false,
             mouse_origin: None,
             searching: false,
             destination: None,
@@ -179,7 +181,14 @@ impl App {
         catalog::page(&self.results, self.page)
     }
     fn variants(&self) -> &'static [&'static str] {
-        self.context.map_or(&[], |i| CATALOG[i].variants)
+        self.context.map_or(&[], |i| {
+            if self.intensity {
+                if let Some(levels) = catalog::intensity(CATALOG[i].text) {
+                    return levels.choices;
+                }
+            }
+            CATALOG[i].variants
+        })
     }
     fn context_layout(&self) -> Option<wheel::ContextLayout> {
         let index = self.context?;
@@ -302,9 +311,19 @@ impl App {
             style &= !WS_EX_LAYERED.0;
         }
         SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style as isize);
+        if enabled {
+            // COLORREF is BGR; the drawn background is RGB 0x12131e.
+            if let Err(error) =
+                SetLayeredWindowAttributes(self.hwnd, COLORREF(0x1e1312), 255, LWA_COLORKEY)
+            {
+                diagnostic(&format!("Color key setup failed: {error}"));
+                self.transparent = false;
+                SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, (style & !WS_EX_LAYERED.0) as isize);
+            }
+        }
         self.graphics = None;
-        diagnostic(if enabled {
-            "Using experimental transparent presentation"
+        diagnostic(if self.transparent {
+            "Using floating color key GDI presentation"
         } else {
             "Using opaque GDI presentation"
         });
@@ -630,18 +649,30 @@ impl App {
         }
         self.hover = hit;
         if let Hit::Item(index) = hit {
-            let context = self
-                .items()
-                .get(index)
-                .copied()
-                .filter(|i| !CATALOG[*i].variants.is_empty());
+            let context = self.items().get(index).copied().filter(|i| {
+                !CATALOG[*i].variants.is_empty()
+                    || (self.intensity && catalog::intensity(CATALOG[*i].text).is_some())
+            });
             self.set_context(context);
         }
         if hit == Hit::Search {
             self.set_context(None);
         }
         if let Some(text) = self.selection(hit) {
-            self.status = format!("Select {text}");
+            let label = if self.intensity {
+                self.context
+                    .and_then(|i| catalog::intensity(CATALOG[i].text))
+                    .and_then(|levels| {
+                        if let Hit::Variant(slot) = hit {
+                            levels.labels.get(slot).copied()
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            };
+            self.status = format!("{} {text}", label.unwrap_or("Select"));
         }
         self.animate();
     }
@@ -653,6 +684,19 @@ impl App {
         }
         match self.hover {
             Hit::Search => self.begin_search(),
+            Hit::Intensity => {
+                self.intensity = !self.intensity;
+                let context = self.context;
+                self.context = None;
+                self.set_context(context);
+                self.status = if self.intensity {
+                    "Intensity on · choose an emotion"
+                } else {
+                    "Standard suggestions"
+                }
+                .into();
+                self.invalidate();
+            }
             Hit::Pin => {
                 self.pinned = !self.pinned;
                 self.mouse_origin = None;
@@ -714,6 +758,7 @@ struct Graphics {
     text: IDWriteTextFormat,
     small: IDWriteTextFormat,
     emoji: IDWriteTextFormat,
+    combo: IDWriteTextFormat,
     brush: ID2D1SolidColorBrush,
     // Drop the COM target and brush before releasing their bound GDI surface.
     surface: Surface,
@@ -771,49 +816,26 @@ impl Surface {
         })
     }
 
-    unsafe fn present(&self, hwnd: HWND, transparent: bool) -> Result<()> {
-        debug_assert!(self.width > 0 && self.height > 0 && !self.pixels.is_null());
-        // The compatibility path uses a regular window and a direct GDI copy;
-        // it does not depend on per-pixel alpha window composition.
-        if !transparent {
-            let destination = GetDC(Some(hwnd));
-            if destination.0.is_null() {
-                return Err(Error::from_thread());
-            }
-            let result = BitBlt(
-                destination,
-                0,
-                0,
-                self.width,
-                self.height,
-                Some(self.dc),
-                0,
-                0,
-                SRCCOPY,
-            );
-            let _ = ReleaseDC(Some(hwnd), destination);
-            return result;
+    unsafe fn present(&self, hwnd: HWND) -> Result<()> {
+        // Both modes use the same proven GDI path. Floating mode uses Windows
+        // color-key redirection rather than UpdateLayeredWindow bitmap alpha.
+        let destination = GetDC(Some(hwnd));
+        if destination.0.is_null() {
+            return Err(Error::from_thread());
         }
-        let origin = POINT::default();
-        let blend = BLENDFUNCTION {
-            BlendOp: AC_SRC_OVER as u8,
-            BlendFlags: 0,
-            SourceConstantAlpha: 255,
-            AlphaFormat: AC_SRC_ALPHA as u8,
-        };
-        // The window has already been sized and positioned by SetWindowPos.
-        // Leaving those pointers null avoids size messages during every frame.
-        UpdateLayeredWindow(
-            hwnd,
-            None,
-            None,
-            None,
+        let result = BitBlt(
+            destination,
+            0,
+            0,
+            self.width,
+            self.height,
             Some(self.dc),
-            Some(&origin),
-            COLORREF(0),
-            Some(&blend),
-            ULW_ALPHA,
-        )
+            0,
+            0,
+            SRCCOPY,
+        );
+        let _ = ReleaseDC(Some(hwnd), destination);
+        result
     }
 
     unsafe fn alpha(&self, x: usize, y: usize) -> u8 {
@@ -897,6 +919,7 @@ impl Graphics {
             text: format(w!("Segoe UI"), 15.0)?,
             small: format(w!("Segoe UI"), 11.0)?,
             emoji: format(w!("Segoe UI Emoji"), 27.0)?,
+            combo: format(w!("Segoe UI Emoji"), 14.0)?,
             surface,
         })
     }
@@ -947,14 +970,20 @@ impl Graphics {
 
     unsafe fn draw(&self, app: &App) -> Result<()> {
         self.target.BeginDraw();
-        self.target.Clear(Some(&if app.transparent {
-            D2D1_COLOR_F::default()
-        } else {
-            color(0x12131e)
-        }));
-        // Only controls get backing pills. The rest of the popup is truly
-        // transparent, with antialiased edges and soft alpha highlights.
+        self.target.Clear(Some(&color(0x12131e)));
+        // The clear color is keyed out in floating mode. Controls remain opaque.
         self.pill(rect(16.0, 12.0, 134.0, 36.0));
+        self.pill(rect(170.0, 12.0, 130.0, 36.0));
+        self.label(
+            if app.intensity {
+                "Intensity ●"
+            } else {
+                "Intensity"
+            },
+            rect(170.0, 12.0, 130.0, 36.0),
+            &self.small,
+            if app.intensity { 0xd7baff } else { 0xaaaabb },
+        );
         self.pill(rect(340.0, 12.0, 40.0, 36.0));
         self.pill(rect(388.0, 12.0, 40.0, 36.0));
         self.pill(rect(12.0, 48.0, 416.0, 24.0));
@@ -1050,7 +1079,11 @@ impl Graphics {
                     self.label_alpha(
                         if repeated.is_some() { base } else { value },
                         rect(p.x - 22.0, p.y - 22.0, 44.0, 44.0),
-                        &self.emoji,
+                        if app.intensity && catalog::intensity(base).is_some() {
+                            &self.combo
+                        } else {
+                            &self.emoji
+                        },
                         0xffffff,
                         expansion,
                     );
@@ -1143,7 +1176,7 @@ impl Graphics {
                 "The rendered wheel has an empty alpha channel",
             ));
         }
-        self.surface.present(app.hwnd, app.transparent)
+        self.surface.present(app.hwnd)
     }
 
     unsafe fn pill(&self, bounds: D2D_RECT_F) {
@@ -1202,7 +1235,7 @@ unsafe extern "system" fn edit_proc(
 }
 
 // Keep the native edit in a tiny owned popup. A child EDIT cannot paint itself
-// into the premultiplied bitmap presented by UpdateLayeredWindow.
+// into the bitmap that is copied to the wheel window.
 unsafe extern "system" fn search_host_proc(
     hwnd: HWND,
     msg: u32,
@@ -1438,8 +1471,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     } else {
                         MF_STRING
                     };
-                    let _ =
-                        AppendMenuW(menu, flags, 3, w!("Transparent background (experimental)"));
+                    let _ = AppendMenuW(menu, flags, 3, w!("Floating background"));
                     let _ = AppendMenuW(menu, MF_STRING, 2, w!("Exit"));
                     let mut point = POINT::default();
                     let _ = GetCursorPos(&mut point);
@@ -1530,6 +1562,7 @@ pub fn run() -> Result<()> {
             Some((&*app as *const RefCell<App>).cast()),
         )?;
         state.hwnd = hwnd;
+        state.set_transparency(true);
         state.motion_preference();
         WINDOW.store(hwnd.0, Ordering::Relaxed);
         // Install callbacks only after every fallible setup step is complete.
@@ -1705,6 +1738,14 @@ mod tests {
             app.borrow_mut().hwnd = window.0;
             for transparent in [false, true, false] {
                 app.borrow_mut().set_transparency(transparent);
+                if transparent {
+                    let mut key = COLORREF(0);
+                    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+                    GetLayeredWindowAttributes(window.0, Some(&mut key), None, Some(&mut flags))
+                        .unwrap();
+                    assert_eq!(key, COLORREF(0x1e1312));
+                    assert_eq!(flags, LWA_COLORKEY);
+                }
                 SendMessageW(window.0, SHOW, None, None);
                 let mut processed = 0;
                 let mut msg = MSG::default();
@@ -1728,7 +1769,7 @@ mod tests {
     }
 
     #[test]
-    fn native_surface_has_transparent_gaps_solid_controls_and_a_search_icon() {
+    fn native_surface_has_keyed_gaps_solid_controls_and_a_search_icon() {
         unsafe {
             let instance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
             let class = WNDCLASSW {
@@ -1757,7 +1798,7 @@ mod tests {
             );
             let mut app = App::new();
             app.hwnd = window.0;
-            app.transparent = true;
+            app.set_transparency(true);
             app.visible = true;
             app.motion_enabled = false;
             // No wait or dwell message is needed to create the parent context.
@@ -1771,12 +1812,13 @@ mod tests {
             app.motion.items[0].reset(1.0);
             let graphics = Graphics::new(window.0, 96).unwrap();
             graphics.draw(&app).unwrap();
-            assert_eq!(graphics.surface.alpha(0, 0), 0);
-            assert_eq!(graphics.surface.alpha(5, 200), 0);
+            let pixel = graphics.surface.pixels;
+            assert_eq!([*pixel, *pixel.add(1), *pixel.add(2)], [0x1e, 0x13, 0x12]);
+            assert_eq!(graphics.surface.alpha(5, 200), 255);
             assert_eq!(graphics.surface.alpha(220, 285), 255);
             assert_eq!(graphics.surface.alpha(220, 185), 255);
             let glow_alpha = graphics.surface.alpha(260, 185);
-            assert!(glow_alpha > 0 && glow_alpha < 255);
+            assert_eq!(glow_alpha, 255);
             let icon = graphics
                 .surface
                 .pixels
@@ -1785,6 +1827,14 @@ mod tests {
                 *icon > 150 && *icon.add(2) > 150,
                 "magnifier stroke must be drawn"
             );
+            app.intensity = true;
+            app.pointer(wheel::item_position(3));
+            assert_eq!(app.variants(), &["😞", "😢💔", "😭💔🥀"]);
+            let layout = app.context_layout().unwrap();
+            app.pointer(wheel::variant_position(layout, 2));
+            assert_eq!(app.selection(app.hover), Some("😭💔🥀"));
+            assert!(app.status.starts_with("Saddest"));
+            graphics.draw(&app).unwrap();
         }
     }
 }

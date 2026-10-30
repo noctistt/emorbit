@@ -152,7 +152,66 @@ pub const CATALOG: &[Emoji] = &[
         keywords: "country indian flag",
         variants: &[],
     },
+    Emoji {
+        text: "😞",
+        name: "disappointed face",
+        keywords: "sad down unhappy",
+        variants: &["😞", "😢", "😭"],
+    },
+    Emoji {
+        text: "😢",
+        name: "crying face",
+        keywords: "sad tears cry",
+        variants: &["😢", "😭", "🥲"],
+    },
+    Emoji {
+        text: "😠",
+        name: "angry face",
+        keywords: "angry mad annoyed rage",
+        variants: &["😠", "😡", "🤬"],
+    },
+    Emoji {
+        text: "😡",
+        name: "enraged face",
+        keywords: "angry mad furious rage",
+        variants: &["😠", "😡", "🤬"],
+    },
+    Emoji {
+        text: "🤬",
+        name: "face with symbols on mouth",
+        keywords: "angry furious swear rage",
+        variants: &["😠", "😡", "🤬"],
+    },
 ];
+
+#[derive(Clone, Copy)]
+pub struct Intensity {
+    pub choices: &'static [&'static str],
+    pub labels: &'static [&'static str],
+}
+
+/// Curated expressive sequences, not a claim that emotions have a universal scale.
+pub fn intensity(text: &str) -> Option<Intensity> {
+    let (choices, labels): (&[&str], &[&str]) = match text {
+        "🥲" | "😞" | "😢" | "😭" => {
+            (&["😞", "😢💔", "😭💔🥀"], &["Sad", "Sadder", "Saddest"])
+        }
+        "😠" | "😡" | "🤬" => (&["😠", "😡💢", "🤬💢🔥"], &["Angry", "Angrier", "Angriest"]),
+        "😂" | "🤣" => (
+            &["😄", "😂🤣", "🤣💀😭"],
+            &["Amused", "Laughing", "Losing it"],
+        ),
+        "❤️" | "😍" => (&["❤️", "🥰❤️", "😍❤️‍🔥🫶"], &["Love", "Adore", "Obsessed"]),
+        "😀" | "😊" => (&["😊", "😄✨", "🤩🎉✨"], &["Happy", "Happier", "Happiest"]),
+        "🎉" => (
+            &["🎉", "🥳🎊", "🥳🎉🎊"],
+            &["Celebrate", "Party", "Party time"],
+        ),
+        "🔥" => (&["🔥", "🔥💥", "🔥💥🚀"], &["Hot", "Hotter", "On fire"]),
+        _ => return None,
+    };
+    Some(Intensity { choices, labels })
+}
 
 /// All query words must match; an empty query preserves the home ordering.
 pub fn search(query: &str) -> Vec<usize> {
@@ -192,6 +251,27 @@ mod tests {
         );
         assert!(search("thumb party").is_empty());
         assert_eq!(search("👩‍💻"), [22]);
+    }
+
+    #[test]
+    fn intensity_sequences_are_named_searchable_and_preserve_combinations() {
+        for text in ["🥲", "😭", "😠", "😡", "🤬", "😂", "❤️", "😊", "🎉", "🔥"]
+        {
+            let levels = intensity(text).unwrap();
+            assert_eq!(levels.choices.len(), 3);
+            assert_eq!(levels.labels.len(), 3);
+            assert_ne!(levels.choices[0], levels.choices[2]);
+            for output in levels.choices {
+                assert_eq!(
+                    String::from_utf16(&crate::unicode_units(output)).unwrap(),
+                    *output
+                );
+            }
+        }
+        assert_eq!(intensity("😠").unwrap().choices[2], "🤬💢🔥");
+        assert_eq!(intensity("😭").unwrap().choices[2], "😭💔🥀");
+        assert!(search("angry").len() >= 3);
+        assert!(intensity("👍").is_none());
     }
 
     #[test]

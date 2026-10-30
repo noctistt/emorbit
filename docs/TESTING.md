@@ -1,6 +1,6 @@
 # Running the native prototype
 
-This is an experimental Windows integration build, not a finished release. It has a manually curated catalog of 24 entries. The full catalog, saved preferences, configurable shortcuts, screen reader support, and polished exploration controls remain future work.
+This is an experimental Windows integration build, not a finished release. It has a manually curated catalog of 29 entries. The full catalog, saved preferences, configurable shortcuts, screen reader support, and polished exploration controls remain future work.
 
 ## Build on Windows
 
@@ -89,6 +89,12 @@ Pinned state, favorites, recents, positions, and preferred skin tones are not pe
 
 Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop. A 16 millisecond gesture timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. A separate animation timer runs only while finite highlight or expansion transitions are active and stops at rest. There is no dwell timer. A Windows native rendering test checks alpha in empty gaps, opaque controls, a partial alpha highlight, vector search icon pixels, and immediate context creation.
 
-### Presentation compatibility
+### Floating background and intensity
 
-Version 0.1.6 defaults to an opaque background drawn to a regular window with GDI. Right click the tray icon and choose **Transparent background (experimental)** to switch to per pixel alpha composition; choose it again to restore opaque drawing. This choice is session only. Both paths use an explicit software Direct2D DC render target. The native lifecycle test opens, renders, hides, and reopens across opaque, transparent, and opaque modes. Startup and first frame diagnostics are written to `%LOCALAPPDATA%\EmOrbit\emorbit.log`, without search or inserted text. A successful presentation call alone does not prove that the window was visibly composed on the user display.
+Version 0.1.7 defaults to a floating window using SetLayeredWindowAttributes with LWA_COLORKEY and the same GDI BitBlt path that worked in solid mode. The background RGB 0x12131e is removed by its COLORREF key 0x1e1312. No UpdateLayeredWindow calls remain. If key setup fails, the app logs the error and keeps the opaque window. Right click the tray icon and choose **Floating background** to switch between floating and solid modes. This is binary color transparency, so antialiased edges and glows may retain a dark fringe; it does not provide per pixel translucent shadows.
+
+Click **Intensity** in the header, then hover or drag onto a supported emotion to show three named levels in the nearby suggestion fan. Sadness uses 😞, 😢💔, and 😭💔🥀. Anger uses 😠, 😡💢, and 🤬💢🔥. Laughter, love, happiness, celebration, and fire also have curated levels. Hover previews the level name and complete output; release inserts that whole Unicode sequence. Unsupported entries retain standard suggestions. Toggle Intensity off for normal variants and skin tones. Mode choices last for the current session.
+
+The native lifecycle test opens, renders, hides, and reopens across solid, floating, and solid modes, and checks the actual Windows color key configuration. Native rendering tests verify the key color in empty gaps, visible controls and search icon, and the intensity mode selection path. Pure catalog tests verify named levels, searchable anger entries, and complete UTF16 combination preservation.
+
+Startup and first frame diagnostics are written to `%LOCALAPPDATA%\EmOrbit\emorbit.log`, without search or inserted text. Live display appearance still requires testing on the affected machine.
