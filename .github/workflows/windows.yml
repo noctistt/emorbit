@@ -90,7 +90,7 @@ jobs:
 
           Tap Ctrl + Alt + Space to open the wheel. Hold the primary mouse button, move to an emoji or variant, and release to insert. Use Pin to keep it visible.
 
-          The app and installer are unsigned. The catalog currently contains 24 entries; this remains a prototype.
+          The app and installer are unsigned. The bundled catalog is deliberately small; this remains a prototype.
           EOF
           gh release create "$EMORBIT_TAG" dist/EmOrbit-Setup.exe dist/EmOrbit-Setup.exe.sha256 \
             --target "$EMORBIT_COMMIT" --prerelease --title "EmOrbit Windows preview $EMORBIT_TAG" \

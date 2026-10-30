@@ -79,7 +79,7 @@ Use a disposable text document. Record app and Windows versions and actual obser
 
 ## Known limitations
 
-The popup uses per pixel transparency with solid controls and pointer based placement, not caret avoidance. A native search edit in a small owned popup is intentionally basic. Emoji rendering depends on system font coverage. Complex or protected editors may not accept Unicode SendInput. Transparent gaps pass mouse input to the underlying application; hold gestures are tracked by the existing short gesture timer while crossing these gaps.
+The popup uses color key transparency with solid controls and pointer based placement, not caret avoidance. A native search edit in a small owned popup is intentionally basic. Emoji rendering depends on system font coverage. Complex or protected editors may not accept Unicode SendInput. Transparent gaps pass mouse input to the underlying application; hold gestures are tracked by the existing short gesture timer while crossing these gaps.
 
 The destination check compares foreground window and focused control handles. It cannot distinguish every cursor or tab change inside a custom editor that reuses one native control. It does not read the target's document text. Input stops if the captured handles no longer match or modifiers remain held for two seconds. A failed or partial injection is reported without retrying the string.
 
@@ -87,7 +87,7 @@ Pinned state, favorites, recents, positions, and preferred skin tones are not pe
 
 ## Resource measurements
 
-Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop. A 16 millisecond gesture timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. A separate animation timer runs only while finite highlight or expansion transitions are active and stops at rest. There is no dwell timer. A Windows native rendering test checks alpha in empty gaps, opaque controls, a partial alpha highlight, vector search icon pixels, and immediate context creation.
+Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop. A 16 millisecond gesture timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. A separate animation timer runs only while finite highlight or expansion transitions are active and stops at rest. There is no dwell timer. Windows native tests check the configured color key, empty background pixels, solid controls, vector search icon pixels, immediate context creation, and intensity selection.
 
 ### Floating background and intensity
 
