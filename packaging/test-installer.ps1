@@ -2,13 +2,14 @@ $ErrorActionPreference = 'Stop'
 $installer = Join-Path $PSScriptRoot '..\dist\EmOrbit-Setup.exe'
 $builtExe = Join-Path $PSScriptRoot '..\target\release\emorbit.exe'
 $installDir = Join-Path $env:RUNNER_TEMP 'EmOrbitInstallTest'
-$group = 'EmOrbit CI Test'
-$shortcutDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$group"
+$programsDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+$shortcutDir = Join-Path $programsDir 'EmOrbit'
+$installLog = Join-Path $env:RUNNER_TEMP 'EmOrbit-Install.log'
 $registryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Noctistt.EmOrbit_is1'
 
 function Install-EmOrbit {
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
-        "/DIR=`"$installDir`"", "/GROUP=`"$group`"", '/TASKS=""')
+        "/DIR=`"$installDir`"", "/LOG=`"$installLog`"", '/TASKS=""')
     $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
     if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
     $installedExe = Join-Path $installDir 'emorbit.exe'
@@ -16,7 +17,10 @@ function Install-EmOrbit {
     if ((Get-FileHash $installedExe).Hash -ne (Get-FileHash $builtExe).Hash) {
         throw 'Installed executable differs from the release build'
     }
-    if (-not (Test-Path (Join-Path $shortcutDir 'EmOrbit.lnk'))) { throw 'Start menu shortcut missing' }
+    if (-not (Test-Path (Join-Path $shortcutDir 'EmOrbit.lnk'))) {
+        Get-Content $installLog -Tail 100 | Write-Output
+        throw "Start menu shortcut missing at $shortcutDir"
+    }
     if (-not (Test-Path $registryKey)) { throw 'Uninstall registration missing' }
 }
 

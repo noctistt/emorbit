@@ -41,8 +41,8 @@ Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "docs\TESTING.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\EmOrbit"; Filename: "{app}\emorbit.exe"
-Name: "{group}\Uninstall EmOrbit"; Filename: "{uninstallexe}"
+Name: "{userprograms}\EmOrbit\EmOrbit"; Filename: "{app}\emorbit.exe"
+Name: "{userprograms}\EmOrbit\Uninstall EmOrbit"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\EmOrbit"; Filename: "{app}\emorbit.exe"; Tasks: desktopicon
 
 [Run]
