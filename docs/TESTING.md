@@ -38,9 +38,9 @@ The Windows workflow compiles setup and runs packaging/test-installer.ps1 in an 
 * Hover an emoji with variants to open its contextual arc immediately. There is no dwell delay. You can keep the mouse button held while exploring the arc; release over the desired variant to insert it.
 * Suggestions now fan outward beside their parent emoji. Move back to the centre to dismiss the fan. While a fan is open, paging arrows and footer text are hidden to leave space for lower suggestions; use the mouse wheel to change pages.
 * Repeated choices show a small ×2 or ×3 badge instead of overflowing strings. The header previews the actual output on hover. Highlights fade and gently grow, and suggestions expand into position. Windows' client area animation preference is read at startup and on settings changes.
-* Move back to the centre after pressing an emoji, or release outside the targets, to cancel. The unpinned picker closes on cancellation; the pinned picker stays open. A stationary centre click opens Search instead.
+* Move back to the centre after pressing an emoji, or release outside the targets, to cancel. The unpinned picker closes on cancellation; the pinned picker stays open. A stationary center logo click dismisses trays; the ring Search button opens input.
 * A drag passing over Pin, Close, or a page arrow does not activate it. Click those controls normally. The primary mouse button respects Windows' swapped button setting.
-* Click the magnifying glass in the centre to activate its text field. Type a query; results replace the wheel. Click a result or press Enter to insert the first result on the current page. The search box is limited to 255 UTF-16 units.
+* Click the magnifying glass on the ring to activate its text field. Type a query; results replace the wheel. Click a result or press Enter to insert the first result on the current page. The search box is limited to 255 UTF-16 units.
 * Scroll over the wheel, or click the arrows, to change result pages.
 * Click Pin to keep the wheel open. Click emojis while the external text field remains focused. Click Unpin to return to closing after selection.
 * Drag the header to move the popup. It does not yet remember its position between openings.
@@ -60,7 +60,7 @@ Use a disposable text document. Record app and Windows versions and actual obser
 | Mouse hold from emoji to variant | Mouse release inserts that variant, not the initial emoji | Pending Windows test |
 | Mouse release outside the popup | Cancels without inserting the last highlighted emoji | Pending Windows test |
 | Drag across toolbar controls | Does not accidentally pin, close, or change pages | Pending Windows test |
-| Hover each of the twelve home emojis | Suggestions appear near that emoji, including bottom and side positions | Pending Windows test |
+| Hover each of the nine home emojis and three utility controls | Suggestions appear near that emoji, including bottom and side positions | Pending Windows test |
 | Quick movement between emojis and variants | Smooth highlights with clickable targets matching their visible positions | Pending Windows test |
 | Disable Windows animations | Transitions snap to their endpoints without repeated animation frames | Pending Windows test |
 | Transparent background | Underlying content is visible between solid emoji buttons; gaps pass clicks through | Pending Windows test |

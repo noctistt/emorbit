@@ -20,7 +20,7 @@ See [running and testing](docs/TESTING.md) for source builds, controls, and know
 
 * Tap an activation shortcut to open, then hold the primary mouse button, move toward an emoji, and release the mouse button to insert.
 * Hover over a selection to reveal its outer arc immediately, with related expressions, repeated versions, or supported skin tones.
-* Click the magnifying glass in the centre and type to replace the wheel contents with search results.
+* Click the magnifying glass on the ring and type to replace the wheel contents with search results.
 * Pin the picker to keep it visible while inserting multiple emojis.
 * Preserve the original typing destination and avoid covering the writing area when its position can be detected.
 * Browse the emoji collection through categories, result pages, and search.

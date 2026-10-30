@@ -1726,7 +1726,9 @@ impl Graphics {
                 0xc5a6ff,
             );
         }
-        if app.status.starts_with("Favorite") || app.status.starts_with("Could not save") {
+        if matches!(app.status.as_str(), "Favorite saved" | "Favorite removed")
+            || app.status.starts_with("Could not save")
+        {
             self.pill(rect(70.0, 474.0, 300.0, 28.0));
             self.label(
                 &app.status,
