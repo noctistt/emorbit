@@ -256,8 +256,10 @@ impl App {
             }
             .into();
         }
-        self.results = self.search_results("");
-        self.page = 0;
+        if self.favorites_mode {
+            self.results = self.search_results("");
+            self.page = self.page.min(catalog::page_count(&self.results) - 1);
+        }
         self.set_context(None);
         self.hover = Hit::None;
         self.invalidate();
@@ -301,6 +303,8 @@ impl App {
         )
         .0;
         let _ = DestroyMenu(menu);
+        self.render_queued.set(false);
+        self.invalidate();
         if let Some(target) = target {
             let _ = SetForegroundWindow(target.window);
         }
@@ -331,6 +335,10 @@ impl App {
         self.end_search();
         self.favorites_mode = true;
         self.toggle_favorite(text.trim(), false);
+        if let Some(index) = self.favorites.items.iter().position(|s| s == text.trim()) {
+            self.page = index / 8;
+        }
+        self.invalidate();
     }
 
     fn variants(&self) -> &[catalog::Suggestion] {
@@ -1665,6 +1673,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if app.searching {
                 app.position_edit();
             }
+            app.render_queued.set(false);
+            app.invalidate();
         }
         WM_LBUTTONDOWN => app.begin_mouse(),
         WM_LBUTTONUP => app.finish_mouse(),
@@ -1795,6 +1805,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     )
                     .0;
                     let _ = DestroyMenu(menu);
+                    app.render_queued.set(false);
+                    app.invalidate();
                     if command == 2 {
                         let _ = PostMessageW(Some(hwnd), EXIT, WPARAM(0), LPARAM(0));
                     } else if command == 1 {
