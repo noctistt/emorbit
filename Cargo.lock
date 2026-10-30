@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "emorbit"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "windows",
  "windows-numerics",

@@ -128,6 +128,7 @@ struct App {
     graphics: Option<Graphics>,
     visible: bool,
     pinned: bool,
+    transparent: bool,
     mouse_origin: Option<Hit>,
     searching: bool,
     destination: Option<Destination>,
@@ -155,6 +156,7 @@ impl App {
             graphics: None,
             visible: false,
             pinned: false,
+            transparent: false,
             mouse_origin: None,
             searching: false,
             destination: None,
@@ -289,6 +291,24 @@ impl App {
         {
             self.render_queued.set(false);
         }
+    }
+
+    unsafe fn set_transparency(&mut self, enabled: bool) {
+        self.transparent = enabled;
+        let mut style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
+        if enabled {
+            style |= WS_EX_LAYERED.0;
+        } else {
+            style &= !WS_EX_LAYERED.0;
+        }
+        SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style as isize);
+        self.graphics = None;
+        diagnostic(if enabled {
+            "Using experimental transparent presentation"
+        } else {
+            "Using opaque GDI presentation"
+        });
+        self.invalidate();
     }
 
     unsafe fn show(&mut self) {
@@ -675,11 +695,14 @@ impl App {
         graphics.draw(self)?;
         if first_frame {
             diagnostic(&format!(
-                "Presented wheel: {}x{}, DPI {}, window visible {}",
+                "Presented wheel: {}x{}, DPI {}, window visible {}, transparent {}, center alpha {}",
                 graphics.surface.width,
                 graphics.surface.height,
                 self.dpi,
-                IsWindowVisible(self.hwnd).as_bool()
+                IsWindowVisible(self.hwnd).as_bool(),
+                self.transparent,
+                graphics.surface.alpha(graphics.surface.width as usize / 2,
+                    (wheel::CENTER.y * self.dpi as f32 / 96.0) as usize)
             ));
         }
         Ok(())
@@ -748,8 +771,29 @@ impl Surface {
         })
     }
 
-    unsafe fn present(&self, hwnd: HWND) -> Result<()> {
+    unsafe fn present(&self, hwnd: HWND, transparent: bool) -> Result<()> {
         debug_assert!(self.width > 0 && self.height > 0 && !self.pixels.is_null());
+        // The compatibility path uses a regular window and a direct GDI copy;
+        // it does not depend on per-pixel alpha window composition.
+        if !transparent {
+            let destination = GetDC(Some(hwnd));
+            if destination.0.is_null() {
+                return Err(Error::from_thread());
+            }
+            let result = BitBlt(
+                destination,
+                0,
+                0,
+                self.width,
+                self.height,
+                Some(self.dc),
+                0,
+                0,
+                SRCCOPY,
+            );
+            let _ = ReleaseDC(Some(hwnd), destination);
+            return result;
+        }
         let origin = POINT::default();
         let blend = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
@@ -772,7 +816,6 @@ impl Surface {
         )
     }
 
-    #[cfg(test)]
     unsafe fn alpha(&self, x: usize, y: usize) -> u8 {
         assert!(x < self.width as usize && y < self.height as usize);
         *self.pixels.add((y * self.width as usize + x) * 4 + 3)
@@ -822,6 +865,7 @@ impl Graphics {
         GetClientRect(hwnd, &mut bounds)?;
         let surface = Surface::new(bounds.right.max(1), bounds.bottom.max(1))?;
         let target = factory.CreateDCRenderTarget(&D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
@@ -903,7 +947,11 @@ impl Graphics {
 
     unsafe fn draw(&self, app: &App) -> Result<()> {
         self.target.BeginDraw();
-        self.target.Clear(Some(&D2D1_COLOR_F::default()));
+        self.target.Clear(Some(&if app.transparent {
+            D2D1_COLOR_F::default()
+        } else {
+            color(0x12131e)
+        }));
         // Only controls get backing pills. The rest of the popup is truly
         // transparent, with antialiased edges and soft alpha highlights.
         self.pill(rect(16.0, 12.0, 134.0, 36.0));
@@ -1087,7 +1135,15 @@ impl Graphics {
             );
         }
         self.target.EndDraw(None, None)?;
-        self.surface.present(app.hwnd)
+        let center_x = self.surface.width as usize / 2;
+        let center_y = (wheel::CENTER.y * app.dpi as f32 / 96.0) as usize;
+        if self.surface.alpha(center_x, center_y) == 0 {
+            return Err(Error::new(
+                E_FAIL,
+                "The rendered wheel has an empty alpha channel",
+            ));
+        }
+        self.surface.present(app.hwnd, app.transparent)
     }
 
     unsafe fn pill(&self, bounds: D2D_RECT_F) {
@@ -1377,6 +1433,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             } else if lp.0 as u32 == WM_RBUTTONUP {
                 if let Ok(menu) = CreatePopupMenu() {
                     let _ = AppendMenuW(menu, MF_STRING, 1, w!("Open EmOrbit"));
+                    let flags = if app.transparent {
+                        MF_STRING | MF_CHECKED
+                    } else {
+                        MF_STRING
+                    };
+                    let _ =
+                        AppendMenuW(menu, flags, 3, w!("Transparent background (experimental)"));
                     let _ = AppendMenuW(menu, MF_STRING, 2, w!("Exit"));
                     let mut point = POINT::default();
                     let _ = GetCursorPos(&mut point);
@@ -1395,6 +1458,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     if command == 2 {
                         let _ = PostMessageW(Some(hwnd), EXIT, WPARAM(0), LPARAM(0));
                     } else if command == 1 {
+                        app.show();
+                    } else if command == 3 {
+                        app.end_search();
+                        app.set_transparency(!app.transparent);
                         app.show();
                     }
                 }
@@ -1449,7 +1516,7 @@ pub fn run() -> Result<()> {
         // access an incompletely initialized App.
         let mut state = app.borrow_mut();
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class.lpszClassName,
             w!("EmOrbit"),
             WS_POPUP | WS_CLIPCHILDREN,
@@ -1636,7 +1703,8 @@ mod tests {
                 .unwrap(),
             );
             app.borrow_mut().hwnd = window.0;
-            for _ in 0..3 {
+            for transparent in [false, true, false] {
+                app.borrow_mut().set_transparency(transparent);
                 SendMessageW(window.0, SHOW, None, None);
                 let mut processed = 0;
                 let mut msg = MSG::default();
@@ -1689,6 +1757,7 @@ mod tests {
             );
             let mut app = App::new();
             app.hwnd = window.0;
+            app.transparent = true;
             app.visible = true;
             app.motion_enabled = false;
             // No wait or dwell message is needed to create the parent context.

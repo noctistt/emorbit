@@ -12,7 +12,7 @@ cargo build --locked --release
 .\target\release\emorbit.exe
 ```
 
-The application starts hidden with a standard placeholder tray icon. It does not install itself, request administrator access, start with Windows, access the network, or use the clipboard. Exit through the tray icon's context menu.
+The application opens its wheel on launch and also provides a standard placeholder tray icon. It does not install itself, request administrator access, start with Windows, access the network, or use the clipboard. Exit through the tray icon's context menu.
 
 ## Download a CI build
 
@@ -88,3 +88,7 @@ Pinned state, favorites, recents, positions, and preferred skin tones are not pe
 ## Resource measurements
 
 Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop. A 16 millisecond gesture timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. A separate animation timer runs only while finite highlight or expansion transitions are active and stops at rest. There is no dwell timer. A Windows native rendering test checks alpha in empty gaps, opaque controls, a partial alpha highlight, vector search icon pixels, and immediate context creation.
+
+### Presentation compatibility
+
+Version 0.1.6 defaults to an opaque background drawn to a regular window with GDI. Right click the tray icon and choose **Transparent background (experimental)** to switch to per pixel alpha composition; choose it again to restore opaque drawing. This choice is session only. Both paths use an explicit software Direct2D DC render target. The native lifecycle test opens, renders, hides, and reopens across opaque, transparent, and opaque modes. Startup and first frame diagnostics are written to `%LOCALAPPDATA%\EmOrbit\emorbit.log`, without search or inserted text. A successful presentation call alone does not prove that the window was visibly composed on the user display.
