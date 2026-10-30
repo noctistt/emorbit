@@ -60,7 +60,7 @@ Use a disposable text document. Record app and Windows versions and actual obser
 | Mouse hold from emoji to variant | Mouse release inserts that variant, not the initial emoji | Pending Windows test |
 | Mouse release outside the popup | Cancels without inserting the last highlighted emoji | Pending Windows test |
 | Drag across toolbar controls | Does not accidentally pin, close, or change pages | Pending Windows test |
-| Hover each of the eight home emojis | Suggestions appear near that emoji, including bottom and side positions | Pending Windows test |
+| Hover each of the twelve home emojis | Suggestions appear near that emoji, including bottom and side positions | Pending Windows test |
 | Quick movement between emojis and variants | Smooth highlights with clickable targets matching their visible positions | Pending Windows test |
 | Disable Windows animations | Transitions snap to their endpoints without repeated animation frames | Pending Windows test |
 | Transparent background | Underlying content is visible between solid emoji buttons; gaps pass clicks through | Pending Windows test |
@@ -97,7 +97,7 @@ The default floating mode uses smooth alpha. **Smooth edges** in the tray menu s
 
 There is no Intensity button or separate mode. Normal nearby fans retain up to four standard choices and add two named stronger reactions for supported emotions. Sadder inserts 😢💔 and Saddest inserts 😭💔🥀; Angrier inserts 😡💢 and Angriest inserts 🤬💢🔥. Other named reactions cover laughter, love, happiness, celebration, and fire. Named choices use readable text inside the existing bubbles rather than clipped emoji sequences. Hover shows the complete output in a compact preview pill. Release inserts that exact sequence. Hand suggestions keep all six skin tone choices.
 
-The toolbar is one compact rounded surface containing the title, pin control, and close control. The always visible instruction/status strip is removed; a short preview appears only while a suggestion is hovered. Paging uses one compact surface.
+The title, close control, favorites, add, and pin buttons form a permanent center hub. The always visible instruction/status strip is removed; a short preview appears only while a suggestion is hovered. Paging uses one compact surface.
 
 Native tests verify transparent gaps, fractional alpha around toolbar corners and glows, solid search/emoji controls, search icon pixels, normal reaction selection without a mode switch, and opening/reopening across smooth, compatible, and solid presentations. Pure tests verify automatic reaction mixing, named output, preserved skin tones, geometry, and UTF16 sequences.
 
@@ -107,8 +107,16 @@ Startup and first frame diagnostics remain in `%LOCALAPPDATA%\EmOrbit\emorbit.lo
 
 ★ toggles a separate favorites dial. + opens a native edit where you can paste an emoji or combination, including ones outside the 29 entry catalog, and press Enter to save it. Nothing is inserted into the external editor when saving. Right click an item or suggestion for Save to favorites; right click a saved item to remove it. Known emoji favorites retain their normal variants. Duplicate sequences are ignored. Favorites are stored in `%LOCALAPPDATA%\EmOrbit\favorites.txt` using an atomic replacement; a save error restores the prior in memory store and displays an error. The store supports 128 entries, each at most 128 UTF16 units, and rejects empty, control character, and ASCII only entries. It preserves Unicode sequences verbatim rather than enforcing the full Unicode emoji standard. Startup loads at most 64 KiB. Mode choice is session only.
 
-The toolbar is lowered to immediately above the main dial. It yields its space while suggestions expand so it cannot cover an upper fan; return to the center to dismiss the fan and access it. Left and right arrow buttons sit at the sides of the dial and yield to an active fan. A compact page count remains below.
+The former top toolbar is replaced by a permanent center hub inside the dial. Hovering an emoji never hides the hub or changes its hit regions. Left and right arrow buttons sit at the sides of the dial and yield to an active fan. A compact page count remains below.
 
 During a held selection gesture, entering the outer left or right edge turns one page. Each excursion turns only once; return through the central band before another turn. The same gesture can then select an item on the new page. Releasing at an edge turns no further pages, inserts nothing, and leaves the picker open. Clicking page buttons still turns exactly once. The gesture uses the existing active press timer and adds no idle polling.
 
 Tests cover favorite save/load/update/removal and Unicode preservation, arbitrary favorite selection, known favorite variants, side arrow hit regions, and one page per edge excursion. Windows still needs manual checks for favorite input focus, context menu dismissal, and held edge gestures on the affected display.
+
+### Permanent hub and compact ring (0.1.10)
+
+The emoji ring now contains twelve 46 DIP buttons per page instead of eight 64 DIP buttons. Search is a smaller central button, with ★ favorites, + add, and Pin directly below it. The title/drag handle and close control sit just above search within the dial. All hub controls remain drawn and clickable while every outward suggestion fan is expanded. There is no separate top toolbar to chase. Side arrows, scrolling, and held edge paging are preserved.
+
+Catalog and favorite pagination use one shared page size, including the page shown after saving a favorite. The animation storage supports all twelve slots. Main emoji text is measured with DirectWrite and scaled to fit its button, preserving joined emoji rendering and avoiding clipped combination favorites. Hovering a favorite previews its complete output.
+
+Geometry tests cover all twelve main targets and all six variants at every anchor, separation between adjacent targets, and persistent access to every hub control during every fan. Native rendering tests check visible hub controls during suggestions and transparent smooth edges. Existing favorite files are unchanged.

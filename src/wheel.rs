@@ -1,7 +1,13 @@
 pub const WIDTH: f32 = 440.0;
 pub const HEIGHT: f32 = 520.0;
 pub const CENTER: Point = Point { x: 220.0, y: 285.0 };
-pub const ITEM_RADIUS: f32 = 32.0;
+pub const SLOTS: usize = crate::PAGE_SIZE;
+pub const ITEM_RADIUS: f32 = 23.0;
+pub const SEARCH_CENTER: Point = Point { x: 220.0, y: 279.0 };
+pub const SEARCH_RADIUS: f32 = 30.0;
+pub const FAVORITES_CENTER: Point = Point { x: 190.0, y: 330.0 };
+pub const ADD_CENTER: Point = Point { x: 220.0, y: 334.0 };
+pub const PIN_CENTER: Point = Point { x: 250.0, y: 330.0 };
 pub const ORBIT_RADIUS: f32 = 100.0;
 pub const VARIANT_RADIUS: f32 = 22.0;
 
@@ -55,7 +61,7 @@ pub fn release_target(pressed: Hit, released: Hit) -> Option<Hit> {
 }
 
 pub fn item_position(index: usize) -> Point {
-    let angle = -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::FRAC_PI_4;
+    let angle = -std::f32::consts::FRAC_PI_2 + index as f32 * std::f32::consts::TAU / SLOTS as f32;
     Point {
         x: CENTER.x + angle.cos() * ORBIT_RADIUS,
         y: CENTER.y + angle.sin() * ORBIT_RADIUS,
@@ -86,23 +92,26 @@ fn inside(point: Point, centre: Point, radius: f32) -> bool {
 }
 
 pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> Hit {
-    // The toolbar yields its space while the expanded fan is active.
-    if context.is_none() && (110.0..146.0).contains(&point.y) {
-        if (180.0..216.0).contains(&point.x) {
-            return Hit::Favorites;
-        }
-        if (220.0..256.0).contains(&point.x) {
-            return Hit::AddFavorite;
-        }
-        if (264.0..306.0).contains(&point.x) {
-            return Hit::Pin;
-        }
-        if (320.0..360.0).contains(&point.x) {
+    // Fixed hub controls stay reachable while any outward fan is expanded.
+    if (226.0..246.0).contains(&point.y) {
+        if (246.0..274.0).contains(&point.x) {
             return Hit::Close;
         }
-        if (70.0..174.0).contains(&point.x) {
+        if (166.0..246.0).contains(&point.x) {
             return Hit::Drag;
         }
+    }
+    if inside(point, FAVORITES_CENTER, 14.0) {
+        return Hit::Favorites;
+    }
+    if inside(point, ADD_CENTER, 12.0) {
+        return Hit::AddFavorite;
+    }
+    if inside(point, PIN_CENTER, 14.0) {
+        return Hit::Pin;
+    }
+    if inside(point, SEARCH_CENTER, SEARCH_RADIUS) {
+        return Hit::Search;
     }
     if let Some(layout) = context {
         // Hit regions follow the same expanding positions as rendering.
@@ -115,13 +124,10 @@ pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> H
             }
         }
     }
-    for index in 0..items.min(8) {
-        if inside(point, item_position(index), ITEM_RADIUS + 3.0) {
+    for index in 0..items.min(SLOTS) {
+        if inside(point, item_position(index), ITEM_RADIUS + 2.0) {
             return Hit::Item(index);
         }
-    }
-    if inside(point, CENTER, 47.0) {
-        return Hit::Search;
     }
     // Side arrows yield to suggestions that can occupy their space.
     if context.is_none() {
@@ -225,10 +231,10 @@ mod tests {
 
     #[test]
     fn every_visible_target_is_reachable() {
-        for i in 0..8 {
-            assert_eq!(hit_test(item_position(i), 8, None), Hit::Item(i));
+        for i in 0..SLOTS {
+            assert_eq!(hit_test(item_position(i), SLOTS, None), Hit::Item(i));
         }
-        for anchor in 0..8 {
+        for anchor in 0..SLOTS {
             let layout = ContextLayout {
                 anchor,
                 count: 6,
@@ -236,18 +242,18 @@ mod tests {
             };
             for i in 0..6 {
                 assert_eq!(
-                    hit_test(variant_position(layout, i), 8, Some(layout)),
+                    hit_test(variant_position(layout, i), SLOTS, Some(layout)),
                     Hit::Variant(i)
                 );
             }
         }
-        assert_eq!(hit_test(CENTER, 8, None), Hit::Search);
+        assert_eq!(hit_test(CENTER, SLOTS, None), Hit::Search);
         assert_eq!(hit_test(item_position(7), 2, None), Hit::None);
     }
 
     #[test]
     fn fans_are_local_outward_and_inside_popup_for_every_parent() {
-        for anchor in 0..8 {
+        for anchor in 0..SLOTS {
             let parent = item_position(anchor);
             for progress in [0.0, 0.25, 0.5, 1.0] {
                 let layout = ContextLayout {
@@ -288,12 +294,12 @@ mod tests {
             };
             for index in 0..6 {
                 assert_eq!(
-                    hit_test(variant_position(layout, index), 8, Some(layout)),
+                    hit_test(variant_position(layout, index), SLOTS, Some(layout)),
                     Hit::Variant(index)
                 );
             }
             assert_ne!(
-                hit_test(Point { x: 130.0, y: 460.0 }, 8, Some(layout)),
+                hit_test(Point { x: 130.0, y: 460.0 }, SLOTS, Some(layout)),
                 Hit::Previous
             );
         }
@@ -337,7 +343,7 @@ mod tests {
                     x: 20.0,
                     y: CENTER.y
                 },
-                8,
+                SLOTS,
                 None
             ),
             Hit::Previous
@@ -348,7 +354,7 @@ mod tests {
                     x: WIDTH - 20.0,
                     y: CENTER.y
                 },
-                8,
+                SLOTS,
                 None
             ),
             Hit::Next
@@ -358,6 +364,30 @@ mod tests {
             release_target(Hit::Favorites, Hit::Favorites),
             Some(Hit::Favorites)
         );
+    }
+
+    #[test]
+    fn dense_ring_and_hub_controls_stay_reachable_with_every_fan() {
+        for anchor in 0..SLOTS {
+            let layout = ContextLayout {
+                anchor,
+                count: 6,
+                progress: 1.0,
+            };
+            for (point, hit) in [
+                (FAVORITES_CENTER, Hit::Favorites),
+                (ADD_CENTER, Hit::AddFavorite),
+                (PIN_CENTER, Hit::Pin),
+                (SEARCH_CENTER, Hit::Search),
+                (Point { x: 260.0, y: 236.0 }, Hit::Close),
+                (Point { x: 210.0, y: 236.0 }, Hit::Drag),
+            ] {
+                assert_eq!(hit_test(point, SLOTS, Some(layout)), hit);
+            }
+            let a = item_position(anchor);
+            let b = item_position((anchor + 1) % SLOTS);
+            assert!((a.x - b.x).hypot(a.y - b.y) > 2.0 * (ITEM_RADIUS + 2.0));
+        }
     }
 
     #[test]

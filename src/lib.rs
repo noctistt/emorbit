@@ -1,3 +1,5 @@
+pub const PAGE_SIZE: usize = 12;
+
 pub mod catalog;
 pub mod favorites;
 pub mod motion;

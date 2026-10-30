@@ -262,12 +262,12 @@ pub fn search(query: &str) -> Vec<usize> {
 }
 
 pub fn page(results: &[usize], number: usize) -> &[usize] {
-    let start = number.saturating_mul(8).min(results.len());
-    &results[start..start.saturating_add(8).min(results.len())]
+    let start = number.saturating_mul(crate::PAGE_SIZE).min(results.len());
+    &results[start..start.saturating_add(crate::PAGE_SIZE).min(results.len())]
 }
 
 pub fn page_count(results: &[usize]) -> usize {
-    results.len().div_ceil(8).max(1)
+    results.len().div_ceil(crate::PAGE_SIZE).max(1)
 }
 
 #[cfg(test)]
@@ -329,6 +329,7 @@ mod tests {
     #[test]
     fn pages_cover_all_results_without_duplicates() {
         let found = search("");
+        assert_eq!(page(&found, 0).len(), crate::PAGE_SIZE);
         let flattened: Vec<_> = (0..page_count(&found))
             .flat_map(|p| page(&found, p).iter().copied())
             .collect();

@@ -34,7 +34,7 @@ use windows::{
         },
     },
 };
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 const HOTKEY: i32 = 1;
 const ESCAPE_KEY: i32 = 2;
@@ -336,7 +336,7 @@ impl App {
         self.favorites_mode = true;
         self.toggle_favorite(text.trim(), false);
         if let Some(index) = self.favorites.items.iter().position(|s| s == text.trim()) {
-            self.page = index / 8;
+            self.page = index / emorbit::PAGE_SIZE;
         }
         self.invalidate();
     }
@@ -501,8 +501,8 @@ impl App {
         // capturing or saving the desktop. This guards silent composition failure.
         let scale = self.dpi as f32 / 96.0;
         let mut point = POINT {
-            x: (wheel::CENTER.x * scale) as i32,
-            y: (wheel::CENTER.y * scale) as i32,
+            x: (wheel::SEARCH_CENTER.x * scale) as i32,
+            y: (wheel::SEARCH_CENTER.y * scale) as i32,
         };
         if !ClientToScreen(self.hwnd, &mut point).as_bool() {
             return;
@@ -560,7 +560,7 @@ impl App {
         let height = (wheel::HEIGHT * scale) as i32;
         let (x, y) = wheel::clamp_origin(
             cursor.x - width / 2,
-            cursor.y - (wheel::CENTER.y * scale) as i32,
+            cursor.y - (wheel::SEARCH_CENTER.y * scale) as i32,
             width,
             height,
             [
@@ -645,8 +645,8 @@ impl App {
         let s = self.dpi as f32 / 96.0;
         let width = if self.adding_favorite { 240.0 } else { 94.0 };
         let mut point = POINT {
-            x: ((wheel::CENTER.x - width / 2.0) * s) as i32,
-            y: (269.0 * s) as i32,
+            x: ((wheel::SEARCH_CENTER.x - width / 2.0) * s) as i32,
+            y: ((wheel::SEARCH_CENTER.y - 15.0) * s) as i32,
         };
         let _ = ClientToScreen(self.hwnd, &mut point);
         let _ = SetWindowPos(
@@ -997,6 +997,7 @@ struct Graphics {
     text: IDWriteTextFormat,
     small: IDWriteTextFormat,
     emoji: IDWriteTextFormat,
+    write: IDWriteFactory,
     brush: ID2D1SolidColorBrush,
     // Drop the COM target and brush before releasing their bound GDI surface.
     surface: Surface,
@@ -1190,7 +1191,8 @@ impl Graphics {
             target,
             text: format(w!("Segoe UI"), 15.0)?,
             small: format(w!("Segoe UI"), 11.0)?,
-            emoji: format(w!("Segoe UI Emoji"), 27.0)?,
+            emoji: format(w!("Segoe UI Emoji"), 23.0)?,
+            write,
             surface,
         })
     }
@@ -1217,6 +1219,40 @@ impl Graphics {
             D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP,
             DWRITE_MEASURING_MODE_NATURAL,
         );
+    }
+
+    /// Fit actual shaped glyphs, including ZWJ emojis and combinations, to a
+    /// smaller target without guessing cluster counts or clipping the output.
+    unsafe fn fitted_emoji(&self, text: &str, point: Point, radius: f32) -> Result<()> {
+        let layout =
+            self.write
+                .CreateTextLayout(&unicode_units(text), &self.emoji, 8192.0, 128.0)?;
+        layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)?;
+        layout.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        layout.GetMetrics(&mut metrics)?;
+        let available = 2.0 * radius - 6.0;
+        let scale = (available / metrics.width.max(1.0))
+            .min(available / metrics.height.max(1.0))
+            .min(1.0);
+        self.brush.SetColor(&color(0xffffff));
+        self.brush.SetOpacity(1.0);
+        self.target.SetTransform(&Matrix3x2 {
+            M11: scale,
+            M12: 0.0,
+            M21: 0.0,
+            M22: scale,
+            M31: point.x - (metrics.left + metrics.width / 2.0) * scale,
+            M32: point.y - (metrics.top + metrics.height / 2.0) * scale,
+        });
+        self.target.DrawTextLayout(
+            Vector2 { X: 0.0, Y: 0.0 },
+            &layout,
+            &self.brush,
+            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+        );
+        self.target.SetTransform(&Matrix3x2::identity());
+        Ok(())
     }
 
     unsafe fn circle(&self, point: Point, radius: f32, rgb: u32) {
@@ -1246,39 +1282,24 @@ impl Graphics {
         } else {
             color(0x12131e)
         }));
-        // Keep the toolbar close to the dial; yield its area to expanded fans.
-        if app.context.is_none() {
-            self.pill(rect(70.0, 110.0, 300.0, 36.0));
-            self.label(
-                if app.favorites_mode {
-                    "Favorites"
-                } else {
-                    "EmOrbit"
-                },
-                rect(76.0, 110.0, 100.0, 36.0),
-                &self.text,
-                0xf3f2ff,
-            );
-            self.label(
-                "★",
-                rect(180.0, 110.0, 36.0, 36.0),
-                &self.text,
-                if app.favorites_mode {
-                    0xc5a6ff
-                } else {
-                    0xaaaabb
-                },
-            );
-            self.label("+", rect(220.0, 110.0, 36.0, 36.0), &self.text, 0xc5a6ff);
-            self.label(
-                if app.pinned { "Unpin" } else { "Pin" },
-                rect(264.0, 110.0, 42.0, 36.0),
-                &self.small,
-                0xbca7ff,
-            );
-            self.label("×", rect(320.0, 110.0, 40.0, 36.0), &self.text, 0xaaaabb);
-        }
-        if matches!(app.hover, Hit::Variant(_)) || app.adding_favorite {
+        // The title, close, and utility controls live in the permanent hub.
+        // Outward suggestions never share this space, so hovering cannot hide it.
+        self.pill(rect(166.0, 226.0, 108.0, 20.0));
+        self.label(
+            if app.favorites_mode {
+                "Favorites"
+            } else {
+                "EmOrbit"
+            },
+            rect(168.0, 226.0, 78.0, 20.0),
+            &self.small,
+            0xf3f2ff,
+        );
+        self.label("×", rect(246.0, 226.0, 28.0, 20.0), &self.small, 0xaaaabb);
+        if matches!(app.hover, Hit::Variant(_))
+            || app.adding_favorite
+            || (app.favorites_mode && matches!(app.hover, Hit::Item(_)))
+        {
             self.pill(rect(90.0, 46.0, 260.0, 26.0));
             self.label(
                 &app.status,
@@ -1306,15 +1327,10 @@ impl Graphics {
         for (slot, index) in app.items().iter().enumerate() {
             let p = wheel::item_position(slot);
             let highlight = app.motion.items[slot].value;
-            let radius = wheel::ITEM_RADIUS + 3.0 * highlight;
+            let radius = wheel::ITEM_RADIUS + 2.0 * highlight;
             self.circle_alpha(p, radius + 7.0, 0xa084fa, 0.11 * highlight);
             self.circle(p, radius, blend(0x292c3e, 0x8060d8, highlight));
-            self.label(
-                app.item_text(*index),
-                rect(p.x - 32.0, p.y - 32.0, 64.0, 64.0),
-                &self.emoji,
-                0xffffff,
-            );
+            self.fitted_emoji(app.item_text(*index), p, wheel::ITEM_RADIUS)?;
             if app
                 .context
                 .is_some_and(|anchor| CATALOG[anchor].text != app.item_text(*index))
@@ -1339,8 +1355,8 @@ impl Graphics {
                 let dy = (p.y - parent.y) / distance;
                 self.target.DrawLine(
                     Vector2 {
-                        X: parent.x + dx * 37.0,
-                        Y: parent.y + dy * 37.0,
+                        X: parent.x + dx * (wheel::ITEM_RADIUS + 5.0),
+                        Y: parent.y + dy * (wheel::ITEM_RADIUS + 5.0),
                     },
                     Vector2 {
                         X: p.x - dx * (radius + 2.0),
@@ -1388,8 +1404,8 @@ impl Graphics {
             }
         }
         self.circle(
-            wheel::CENTER,
-            47.0,
+            wheel::SEARCH_CENTER,
+            wheel::SEARCH_RADIUS,
             blend(0x373049, 0x66519d, app.motion.search.value),
         );
         if !app.searching {
@@ -1398,8 +1414,8 @@ impl Graphics {
             self.target.DrawEllipse(
                 &D2D1_ELLIPSE {
                     point: Vector2 {
-                        X: wheel::CENTER.x - 3.0,
-                        Y: wheel::CENTER.y - 3.0,
+                        X: wheel::SEARCH_CENTER.x - 3.0,
+                        Y: wheel::SEARCH_CENTER.y - 3.0,
                     },
                     radiusX: 10.0,
                     radiusY: 10.0,
@@ -1410,16 +1426,58 @@ impl Graphics {
             );
             self.target.DrawLine(
                 Vector2 {
-                    X: wheel::CENTER.x + 4.0,
-                    Y: wheel::CENTER.y + 4.0,
+                    X: wheel::SEARCH_CENTER.x + 4.0,
+                    Y: wheel::SEARCH_CENTER.y + 4.0,
                 },
                 Vector2 {
-                    X: wheel::CENTER.x + 15.0,
-                    Y: wheel::CENTER.y + 15.0,
+                    X: wheel::SEARCH_CENTER.x + 15.0,
+                    Y: wheel::SEARCH_CENTER.y + 15.0,
                 },
                 &self.brush,
                 3.0,
                 None,
+            );
+        }
+        for (point, radius, hit, label, active) in [
+            (
+                wheel::FAVORITES_CENTER,
+                14.0,
+                Hit::Favorites,
+                "★",
+                app.favorites_mode,
+            ),
+            (wheel::ADD_CENTER, 12.0, Hit::AddFavorite, "+", false),
+            (
+                wheel::PIN_CENTER,
+                14.0,
+                Hit::Pin,
+                if app.pinned { "Unpin" } else { "Pin" },
+                app.pinned,
+            ),
+        ] {
+            self.circle(
+                point,
+                radius,
+                if active || app.hover == hit {
+                    0x66519d
+                } else {
+                    0x292c3e
+                },
+            );
+            self.label(
+                label,
+                rect(
+                    point.x - radius,
+                    point.y - radius,
+                    radius * 2.0,
+                    radius * 2.0,
+                ),
+                if hit == Hit::Pin {
+                    &self.small
+                } else {
+                    &self.text
+                },
+                0xe4d9ff,
             );
         }
         if app.results.is_empty() {
@@ -2169,7 +2227,7 @@ mod tests {
             assert_eq!(graphics.surface.alpha(0, 0), 0);
             assert_eq!(graphics.surface.alpha(5, 200), 0);
             assert!(
-                (70..84).any(|x| (110..124).any(|y| {
+                (166..180).any(|x| (226..240).any(|y| {
                     let alpha = graphics.surface.alpha(x, y);
                     alpha > 0 && alpha < 240
                 })),
@@ -2177,12 +2235,12 @@ mod tests {
             );
             assert_eq!(graphics.surface.alpha(220, 285), 255);
             assert_eq!(graphics.surface.alpha(220, 185), 255);
-            let glow_alpha = graphics.surface.alpha(260, 185);
+            let glow_alpha = graphics.surface.alpha(249, 185);
             assert!(glow_alpha > 0 && glow_alpha < 255);
             let icon = graphics
                 .surface
                 .pixels
-                .add((282 * graphics.surface.width as usize + 227) * 4);
+                .add((276 * graphics.surface.width as usize + 227) * 4);
             assert!(
                 *icon > 150 && *icon.add(2) > 150,
                 "magnifier stroke must be drawn"
@@ -2197,6 +2255,16 @@ mod tests {
             assert_eq!(app.selection(app.hover).as_deref(), Some("😭💔🥀"));
             assert!(app.status.starts_with("Saddest"));
             graphics.draw(&app).unwrap();
+            for point in [
+                wheel::FAVORITES_CENTER,
+                wheel::ADD_CENTER,
+                wheel::PIN_CENTER,
+            ] {
+                assert_eq!(
+                    graphics.surface.alpha(point.x as usize, point.y as usize),
+                    255
+                );
+            }
         }
     }
 }
