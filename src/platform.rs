@@ -1554,6 +1554,59 @@ mod tests {
     }
 
     #[test]
+    fn real_window_opens_renders_and_settles_after_reopening() {
+        unsafe {
+            let instance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(wndproc),
+                hInstance: instance,
+                lpszClassName: w!("EmOrbit.LifecycleTest"),
+                ..Default::default()
+            };
+            assert_ne!(RegisterClassW(&class), 0);
+            let app = Box::new(RefCell::new(App::new()));
+            let window = TestWindow(
+                CreateWindowExW(
+                    WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                    class.lpszClassName,
+                    w!("EmOrbit lifecycle test"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    wheel::WIDTH as i32,
+                    wheel::HEIGHT as i32,
+                    None,
+                    None,
+                    Some(instance),
+                    Some((&*app as *const RefCell<App>).cast()),
+                )
+                .unwrap(),
+            );
+            app.borrow_mut().hwnd = window.0;
+            for _ in 0..3 {
+                SendMessageW(window.0, SHOW, None, None);
+                let mut processed = 0;
+                let mut msg = MSG::default();
+                while PeekMessageW(&mut msg, Some(window.0), 0, 0, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&msg);
+                    processed += 1;
+                    assert!(processed < 100, "window never settles after opening");
+                }
+                let state = app.borrow();
+                assert!(state.visible);
+                assert!(IsWindowVisible(window.0).as_bool());
+                assert!(!state.render_queued.get());
+                assert!(
+                    state.graphics.is_some(),
+                    "opening must present the first frame"
+                );
+                drop(state);
+                app.borrow_mut().hide();
+            }
+        }
+    }
+
+    #[test]
     fn native_surface_has_transparent_gaps_solid_controls_and_a_search_icon() {
         unsafe {
             let instance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
