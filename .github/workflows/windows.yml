@@ -1,0 +1,39 @@
+name: Windows prototype
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Check and build Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --locked
+      - name: Build native executable
+        run: cargo build --locked --release
+      - name: Upload prototype
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmOrbit-Windows-x64
+          path: |
+            target/release/emorbit.exe
+            README.md
+            LICENSE
+            docs/TESTING.md
+          if-no-files-found: error

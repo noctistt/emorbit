@@ -9,7 +9,9 @@
 * Local preference files for favourites, recent entries, skin tone, placement, and shortcut configuration.
 * A locally searchable Unicode emoji catalog with reviewed licensing and provenance.
 
-Dependency versions, minimum Windows version, packaging, and installation method are not yet selected. No Rust application or build commands exist in the repository yet.
+The prototype uses windows 0.62.2 and windows-numerics 0.3.1 with Cargo.lock committed for reproducible resolution. See TESTING.md for build commands. Windows x64 builds run in GitHub Actions. The initial target is Windows 11 x64; broader compatibility and minimum supported versions remain to be validated. Packaging is currently an unsigned executable in a CI artifact, not an installer.
+
+The current popup is event driven and rendered with Direct2D and DirectWrite. Pure catalog, Unicode encoding, and wheel geometry logic live in the library. The native application lives in platform.rs. Its boxed RefCell state outlives the native window; callbacks guard against synchronous reentrancy and defer size refreshes when necessary. The native layer remains a prototype requiring interactive validation.
 
 ## Suggested boundaries
 
