@@ -1,4 +1,4 @@
-pub const PAGE_SIZE: usize = 12;
+pub const PAGE_SIZE: usize = 9;
 
 pub mod catalog;
 pub mod favorites;

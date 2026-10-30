@@ -120,3 +120,11 @@ The emoji ring now contains twelve 46 DIP buttons per page instead of eight 64 D
 Catalog and favorite pagination use one shared page size, including the page shown after saving a favorite. The animation storage supports all twelve slots. Main emoji text is measured with DirectWrite and scaled to fit its button, preserving joined emoji rendering and avoiding clipped combination favorites. Hovering a favorite previews its complete output.
 
 Geometry tests cover all twelve main targets and all six variants at every anchor, separation between adjacent targets, and persistent access to every hub control during every fan. Native rendering tests check visible hub controls during suggestions and transparent smooth edges. Existing favorite files are unchanged.
+
+### Utility ring, favorite tray, and central logo (0.1.11)
+
+The twelve outer positions now contain nine emoji choices and three dedicated actions: Favorites, Search, and Pin. These action slots remain available even on a partial result page. The center shows a native vector EmOrbit orbit mark and wordmark. It starts held selection gestures and dismisses trays, but no longer opens search on a stationary click. The small drag grip and app close button remain below it.
+
+Hover or click Favorites to open an anchored suggestion tray beside its star. Each tray page contains up to five saved favorites plus an always available + entry, including when the store is empty. Scroll to page the tray; a held edge gesture that begins on Favorites also pages it. A held edge gesture beginning on the central logo continues to page the normal dial even if it passes over the star. Favorite trays stay open when crossing neighboring ring targets so the pointer can reach their outer choices; move back to the center to dismiss one. Right click a saved choice to remove it.
+
+Search opens an owned input in the center and hides the logo. A real native × child button sits beside the edit field; clicking it closes the input, resets search, restores the logo and external typing focus, and keeps pin state. Escape also closes search. The same close control cancels custom favorite entry. Native tests exercise the actual close button command and rendering tests verify that the logo disappears only while input is open. Existing favorite files are unchanged.

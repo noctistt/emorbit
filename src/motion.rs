@@ -53,7 +53,7 @@ impl Transition {
 
 #[derive(Default)]
 pub struct Motion {
-    pub items: [Transition; crate::PAGE_SIZE],
+    pub items: [Transition; crate::wheel::SLOTS],
     pub variants: [Transition; 6],
     pub search: Transition,
     pub expansion: Transition,

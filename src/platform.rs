@@ -47,6 +47,7 @@ const FOREGROUND: u32 = WM_APP + 2;
 const SHOW: u32 = WM_APP + 3;
 const SEARCH_ENTER: u32 = WM_APP + 4;
 const SEARCH_ESCAPE: u32 = WM_APP + 5;
+const SEARCH_CLOSE_ID: usize = 101;
 const REFRESH_SIZE: u32 = WM_APP + 6;
 const EXIT: u32 = WM_APP + 7;
 const RENDER: u32 = WM_APP + 8;
@@ -127,6 +128,7 @@ struct App {
     hwnd: HWND,
     search_host: HWND,
     edit: HWND,
+    search_close: HWND,
     render_queued: Cell<bool>,
     graphics: Option<Graphics>,
     visible: bool,
@@ -137,10 +139,12 @@ struct App {
     mouse_origin: Option<Hit>,
     searching: bool,
     adding_favorite: bool,
-    favorites_mode: bool,
+    favorite_tray: bool,
+    favorite_page: usize,
     favorites: Favorites,
     edge_pager: wheel::EdgePager,
     gesture_paged: bool,
+    gesture_favorites: bool,
     destination: Option<Destination>,
     results: Vec<usize>,
     page: usize,
@@ -162,6 +166,7 @@ impl App {
             hwnd: HWND::default(),
             search_host: HWND::default(),
             edit: HWND::default(),
+            search_close: HWND::default(),
             render_queued: Cell::new(false),
             graphics: None,
             visible: false,
@@ -172,10 +177,12 @@ impl App {
             mouse_origin: None,
             searching: false,
             adding_favorite: false,
-            favorites_mode: false,
+            favorite_tray: false,
+            favorite_page: 0,
             favorites: Favorites::default(),
             edge_pager: wheel::EdgePager::default(),
             gesture_paged: false,
+            gesture_favorites: false,
             destination: None,
             results: catalog::search(""),
             page: 0,
@@ -206,25 +213,34 @@ impl App {
         }
     }
     fn search_results(&self, query: &str) -> Vec<usize> {
-        if !self.favorites_mode {
-            return catalog::search(query);
+        catalog::search(query)
+    }
+    fn favorite_values(&self) -> &[String] {
+        self.favorites.page(self.favorite_page)
+    }
+    unsafe fn open_favorites(&mut self) {
+        if self.favorite_tray {
+            return;
         }
-        let query = query.trim().to_lowercase();
-        self.favorites
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, text)| {
-                let words = CATALOG.iter().find(|e| e.text == text).map_or_else(
-                    || text.clone(),
-                    |e| format!("{} {} {}", text, e.name, e.keywords),
-                );
-                query
-                    .split_whitespace()
-                    .all(|q| words.to_lowercase().contains(q))
-                    .then_some(CATALOG.len() + i)
-            })
-            .collect()
+        self.set_context(None);
+        self.favorite_tray = true;
+        self.favorite_page = self.favorite_page.min(self.favorites.page_count() - 1);
+        self.motion.expansion.reset(0.0);
+        self.motion.expansion.target(1.0, 0.18);
+        self.status = format!(
+            "Favorites {} / {} · scroll for more · + adds",
+            self.favorite_page + 1,
+            self.favorites.page_count()
+        );
+        self.animate();
+    }
+    unsafe fn close_search(&mut self) {
+        self.end_search();
+        self.results = self.search_results("");
+        self.page = 0;
+        self.set_context(None);
+        self.hover = Hit::None;
+        self.invalidate();
     }
     fn favorites_path() -> Option<std::path::PathBuf> {
         std::env::var_os("LOCALAPPDATA").map(|p| {
@@ -256,11 +272,12 @@ impl App {
             }
             .into();
         }
-        if self.favorites_mode {
-            self.results = self.search_results("");
-            self.page = self.page.min(catalog::page_count(&self.results) - 1);
-        }
+        let reopen = self.favorite_tray;
+        self.favorite_page = self.favorite_page.min(self.favorites.page_count() - 1);
         self.set_context(None);
+        if reopen {
+            self.open_favorites();
+        }
         self.hover = Hit::None;
         self.invalidate();
     }
@@ -333,11 +350,11 @@ impl App {
             return;
         }
         self.end_search();
-        self.favorites_mode = true;
         self.toggle_favorite(text.trim(), false);
         if let Some(index) = self.favorites.items.iter().position(|s| s == text.trim()) {
-            self.page = index / emorbit::PAGE_SIZE;
+            self.favorite_page = index / emorbit::favorites::TRAY_PAGE_SIZE;
         }
+        self.open_favorites();
         self.invalidate();
     }
 
@@ -345,6 +362,13 @@ impl App {
         &self.choices
     }
     fn context_layout(&self) -> Option<wheel::ContextLayout> {
+        if self.favorite_tray {
+            return Some(wheel::ContextLayout {
+                anchor: wheel::FAVORITES_SLOT,
+                count: self.favorite_values().len() + 1,
+                progress: self.motion.expansion.value,
+            });
+        }
         let index = self.context?;
         Some(wheel::ContextLayout {
             anchor: self
@@ -359,7 +383,11 @@ impl App {
     unsafe fn animate(&mut self) {
         let anchor = self.context_layout().map(|layout| layout.anchor);
         for (index, item) in self.motion.items.iter_mut().enumerate() {
-            let target = if self.hover == Hit::Item(index) {
+            let target = if self.hover == Hit::Item(index)
+                || (index == wheel::FAVORITES_SLOT && self.hover == Hit::Favorites)
+                || (index == wheel::SEARCH_SLOT && self.hover == Hit::Search)
+                || (index == wheel::PIN_SLOT && self.hover == Hit::Pin)
+            {
                 1.0
             } else if anchor == Some(index) {
                 0.55
@@ -368,9 +396,15 @@ impl App {
             };
             item.target(target, 0.14);
         }
+        let favorite_count = self.favorite_values().len();
         for (index, variant) in self.motion.variants.iter_mut().enumerate() {
             variant.target(
-                if self.hover == Hit::Variant(index) {
+                if self.hover == Hit::Variant(index)
+                    || self.hover == Hit::FavoriteEntry(index)
+                    || (self.favorite_tray
+                        && index == favorite_count
+                        && self.hover == Hit::AddFavorite)
+                {
                     1.0
                 } else {
                     0.0
@@ -413,7 +447,9 @@ impl App {
     }
 
     unsafe fn set_context(&mut self, index: Option<usize>) {
-        if self.context == index {
+        let had_favorites = self.favorite_tray;
+        self.favorite_tray = false;
+        if self.context == index && !had_favorites {
             return;
         }
         self.context = index;
@@ -449,6 +485,7 @@ impl App {
                 .get(i)
                 .map(|index| self.item_text(*index).to_owned()),
             Hit::Variant(i) => self.variants().get(i).map(|s| s.text.to_owned()),
+            Hit::FavoriteEntry(i) => self.favorite_values().get(i).cloned(),
             _ => None,
         }
     }
@@ -501,8 +538,8 @@ impl App {
         // capturing or saving the desktop. This guards silent composition failure.
         let scale = self.dpi as f32 / 96.0;
         let mut point = POINT {
-            x: (wheel::SEARCH_CENTER.x * scale) as i32,
-            y: (wheel::SEARCH_CENTER.y * scale) as i32,
+            x: ((wheel::CENTER.x + 31.0) * scale) as i32,
+            y: (wheel::CENTER.y * scale) as i32,
         };
         if !ClientToScreen(self.hwnd, &mut point).as_bool() {
             return;
@@ -517,7 +554,7 @@ impl App {
             diagnostic("Display pixel check unavailable");
             return;
         }
-        let expected = blend(0x373049, 0x66519d, self.motion.search.value);
+        let expected: u32 = 0x373049;
         let observed = ((pixel.0 & 255) << 16) | (pixel.0 & 0xff00) | ((pixel.0 >> 16) & 255);
         let matches = [0, 8, 16].iter().all(|shift| {
             (((observed >> shift) & 255) as i32 - ((expected >> shift) & 255) as i32).abs() <= 24
@@ -541,6 +578,7 @@ impl App {
         self.searching = false;
         self.hover = Hit::None;
         self.context = None;
+        self.favorite_tray = false;
         self.choices.clear();
         self.motion = Motion::default();
         self.page = 0;
@@ -560,7 +598,7 @@ impl App {
         let height = (wheel::HEIGHT * scale) as i32;
         let (x, y) = wheel::clamp_origin(
             cursor.x - width / 2,
-            cursor.y - (wheel::SEARCH_CENTER.y * scale) as i32,
+            cursor.y - (wheel::CENTER.y * scale) as i32,
             width,
             height,
             [
@@ -620,6 +658,56 @@ impl App {
         self.graphics = None;
     }
 
+    unsafe fn create_search_controls(&mut self, instance: HINSTANCE, class: PCWSTR) -> Result<()> {
+        self.search_host = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            class,
+            w!("Search emojis"),
+            WS_POPUP | WS_CLIPCHILDREN,
+            0,
+            0,
+            94,
+            30,
+            Some(self.hwnd),
+            None,
+            Some(instance),
+            None,
+        )?;
+        self.edit = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("EDIT"),
+            w!(""),
+            WS_CHILD | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
+            0,
+            0,
+            94,
+            30,
+            Some(self.search_host),
+            Some(HMENU(100usize as *mut _)),
+            Some(instance),
+            None,
+        )?;
+        self.search_close = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("×"),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
+            94,
+            0,
+            24,
+            30,
+            Some(self.search_host),
+            Some(HMENU(SEARCH_CLOSE_ID as *mut _)),
+            Some(instance),
+            None,
+        )?;
+        if !SetWindowSubclass(self.edit, Some(edit_proc), 1, self.hwnd.0 as usize).as_bool() {
+            return Err(Error::from_thread());
+        }
+        SendMessageW(self.edit, EM_SETLIMITTEXT, Some(WPARAM(255)), None);
+        Ok(())
+    }
+
     unsafe fn begin_search(&mut self) {
         self.mouse_origin = None;
         if self.pending.is_some() {
@@ -643,10 +731,11 @@ impl App {
 
     unsafe fn position_edit(&self) {
         let s = self.dpi as f32 / 96.0;
-        let width = if self.adding_favorite { 240.0 } else { 94.0 };
+        let width = if self.adding_favorite { 240.0 } else { 112.0 };
+        let total_width = width + 24.0;
         let mut point = POINT {
-            x: ((wheel::SEARCH_CENTER.x - width / 2.0) * s) as i32,
-            y: ((wheel::SEARCH_CENTER.y - 15.0) * s) as i32,
+            x: ((wheel::CENTER.x - total_width / 2.0) * s) as i32,
+            y: ((wheel::CENTER.y - 15.0) * s) as i32,
         };
         let _ = ClientToScreen(self.hwnd, &mut point);
         let _ = SetWindowPos(
@@ -654,7 +743,7 @@ impl App {
             Some(HWND_TOPMOST),
             point.x,
             point.y,
-            (width * s) as i32,
+            (total_width * s) as i32,
             (30.0 * s) as i32,
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
@@ -664,6 +753,15 @@ impl App {
             0,
             0,
             (width * s) as i32,
+            (30.0 * s) as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        let _ = SetWindowPos(
+            self.search_close,
+            None,
+            (width * s) as i32,
+            0,
+            (24.0 * s) as i32,
             (30.0 * s) as i32,
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
@@ -825,6 +923,7 @@ impl App {
             self.destination = Destination::capture(self.hwnd);
         }
         self.refresh_pointer();
+        self.gesture_favorites = self.favorite_tray;
         self.mouse_origin = Some(self.hover);
         SetTimer(Some(self.hwnd), TICK, 16, None);
     }
@@ -836,8 +935,10 @@ impl App {
         let _ = KillTimer(Some(self.hwnd), TICK);
         self.refresh_pointer();
         if let Some(target) = wheel::release_target(origin, self.hover) {
-            if matches!(target, Hit::Item(_) | Hit::Variant(_))
-                && !self.searching
+            if matches!(
+                target,
+                Hit::Item(_) | Hit::Variant(_) | Hit::FavoriteEntry(_)
+            ) && !self.searching
                 && !self
                     .destination
                     .is_some_and(|destination| destination.still_focused())
@@ -859,7 +960,15 @@ impl App {
     unsafe fn pointer(&mut self, point: Point) {
         if matches!(
             self.mouse_origin,
-            Some(Hit::Search | Hit::Item(_) | Hit::Variant(_) | Hit::None)
+            Some(
+                Hit::Hub
+                    | Hit::Search
+                    | Hit::Favorites
+                    | Hit::FavoriteEntry(_)
+                    | Hit::Item(_)
+                    | Hit::Variant(_)
+                    | Hit::None
+            )
         ) {
             let primary = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
                 VK_RBUTTON
@@ -869,28 +978,51 @@ impl App {
             if GetAsyncKeyState(primary.0 as i32) < 0 {
                 if let Some(direction) = self.edge_pager.update(point) {
                     self.gesture_paged = true;
+                    if !self.gesture_favorites && self.favorite_tray {
+                        self.set_context(None);
+                    }
+                    if self.gesture_favorites && !self.favorite_tray {
+                        self.open_favorites();
+                    }
                     self.change_page(direction);
                 }
             }
         }
-        let hit = wheel::hit_test(point, self.items().len(), self.context_layout());
+        let mut hit = wheel::hit_test(point, self.items().len(), self.context_layout());
+        if self.favorite_tray {
+            if let Hit::Variant(index) = hit {
+                hit = if index == self.favorite_values().len() {
+                    Hit::AddFavorite
+                } else {
+                    Hit::FavoriteEntry(index)
+                };
+            }
+        }
         if hit == self.hover {
             return;
         }
         self.hover = hit;
         if let Hit::Item(index) = hit {
-            let context = self
-                .items()
-                .get(index)
-                .and_then(|i| CATALOG.iter().position(|e| e.text == self.item_text(*i)))
-                .filter(|i| {
-                    !CATALOG[*i].variants.is_empty()
-                        || catalog::intensity(CATALOG[*i].text).is_some()
-                });
-            self.set_context(context);
+            if !self.favorite_tray {
+                let context = self
+                    .items()
+                    .get(index)
+                    .and_then(|i| CATALOG.iter().position(|e| e.text == self.item_text(*i)))
+                    .filter(|i| {
+                        !CATALOG[*i].variants.is_empty()
+                            || catalog::intensity(CATALOG[*i].text).is_some()
+                    });
+                self.set_context(context);
+            }
         }
-        if hit == Hit::Search {
+        if hit == Hit::Hub || (hit == Hit::Search && !self.favorite_tray) {
             self.set_context(None);
+        }
+        if hit == Hit::Favorites && !self.searching {
+            self.open_favorites();
+        }
+        if hit == Hit::AddFavorite {
+            self.status = "Add a favorite · paste emoji then Enter".into();
         }
         if let Some(text) = self.selection(hit) {
             let label = if let Hit::Variant(slot) = hit {
@@ -913,14 +1045,12 @@ impl App {
         }
         match self.hover {
             Hit::Search => self.begin_search(),
+            Hit::Hub => self.set_context(None),
             Hit::Favorites => {
-                self.end_search();
-                self.favorites_mode = !self.favorites_mode;
-                self.results = self.search_results("");
-                self.page = 0;
-                self.set_context(None);
-                self.hover = Hit::None;
-                self.invalidate();
+                if self.searching {
+                    self.close_search();
+                }
+                self.open_favorites();
             }
             Hit::AddFavorite => self.begin_favorite(),
             Hit::Pin => {
@@ -949,6 +1079,21 @@ impl App {
     }
 
     unsafe fn change_page(&mut self, delta: i32) {
+        if self.favorite_tray {
+            let count = self.favorites.page_count() as i32;
+            self.favorite_page = (self.favorite_page as i32 + delta).rem_euclid(count) as usize;
+            self.hover = Hit::None;
+            self.status = format!(
+                "Favorites {} / {} · scroll for more · + adds",
+                self.favorite_page + 1,
+                count
+            );
+            for variant in &mut self.motion.variants {
+                variant.reset(0.0);
+            }
+            self.animate();
+            return;
+        }
         let count = catalog::page_count(&self.results) as i32;
         self.page = (self.page as i32 + delta).rem_euclid(count) as usize;
         self.set_context(None);
@@ -1223,7 +1368,7 @@ impl Graphics {
 
     /// Fit actual shaped glyphs, including ZWJ emojis and combinations, to a
     /// smaller target without guessing cluster counts or clipping the output.
-    unsafe fn fitted_emoji(&self, text: &str, point: Point, radius: f32) -> Result<()> {
+    unsafe fn fitted_emoji(&self, text: &str, point: Point, radius: f32, alpha: f32) -> Result<()> {
         let layout =
             self.write
                 .CreateTextLayout(&unicode_units(text), &self.emoji, 8192.0, 128.0)?;
@@ -1236,7 +1381,7 @@ impl Graphics {
             .min(available / metrics.height.max(1.0))
             .min(1.0);
         self.brush.SetColor(&color(0xffffff));
-        self.brush.SetOpacity(1.0);
+        self.brush.SetOpacity(alpha);
         self.target.SetTransform(&Matrix3x2 {
             M11: scale,
             M12: 0.0,
@@ -1275,6 +1420,75 @@ impl Graphics {
         );
     }
 
+    unsafe fn magnifier(&self, point: Point) {
+        self.brush.SetColor(&color(0xe4d9ff));
+        self.brush.SetOpacity(1.0);
+        self.target.DrawEllipse(
+            &D2D1_ELLIPSE {
+                point: Vector2 {
+                    X: point.x - 2.0,
+                    Y: point.y - 2.0,
+                },
+                radiusX: 8.0,
+                radiusY: 8.0,
+            },
+            &self.brush,
+            2.0,
+            None,
+        );
+        self.target.DrawLine(
+            Vector2 {
+                X: point.x + 4.0,
+                Y: point.y + 4.0,
+            },
+            Vector2 {
+                X: point.x + 11.0,
+                Y: point.y + 11.0,
+            },
+            &self.brush,
+            2.5,
+            None,
+        );
+    }
+    unsafe fn logo(&self) {
+        self.circle(wheel::CENTER, wheel::LOGO_RADIUS, 0x373049);
+        let atom = Vector2 {
+            X: wheel::CENTER.x,
+            Y: wheel::CENTER.y - 8.0,
+        };
+        self.brush.SetColor(&color(0xc6adff));
+        self.brush.SetOpacity(0.9);
+        for angle in [0.0, 60.0, 120.0] {
+            self.target
+                .SetTransform(&Matrix3x2::rotation_around(angle, atom));
+            self.target.DrawEllipse(
+                &D2D1_ELLIPSE {
+                    point: atom,
+                    radiusX: 24.0,
+                    radiusY: 9.0,
+                },
+                &self.brush,
+                1.5,
+                None,
+            );
+        }
+        self.target.SetTransform(&Matrix3x2::identity());
+        self.circle(
+            Point {
+                x: atom.X,
+                y: atom.Y,
+            },
+            4.0,
+            0xc6adff,
+        );
+        self.label(
+            "EmOrbit",
+            rect(184.0, 299.0, 72.0, 18.0),
+            &self.small,
+            0xf3edff,
+        );
+    }
+
     unsafe fn draw(&self, app: &App) -> Result<()> {
         self.target.BeginDraw();
         self.target.Clear(Some(&if app.transparent && app.smooth {
@@ -1282,28 +1496,14 @@ impl Graphics {
         } else {
             color(0x12131e)
         }));
-        // The title, close, and utility controls live in the permanent hub.
-        // Outward suggestions never share this space, so hovering cannot hide it.
-        self.pill(rect(166.0, 226.0, 108.0, 20.0));
-        self.label(
-            if app.favorites_mode {
-                "Favorites"
-            } else {
-                "EmOrbit"
-            },
-            rect(168.0, 226.0, 78.0, 20.0),
-            &self.small,
-            0xf3f2ff,
-        );
-        self.label("×", rect(246.0, 226.0, 28.0, 20.0), &self.small, 0xaaaabb);
-        if matches!(app.hover, Hit::Variant(_))
+        if matches!(app.hover, Hit::Variant(_) | Hit::FavoriteEntry(_))
             || app.adding_favorite
-            || (app.favorites_mode && matches!(app.hover, Hit::Item(_)))
+            || app.favorite_tray
         {
-            self.pill(rect(90.0, 46.0, 260.0, 26.0));
+            self.pill(rect(70.0, 46.0, 300.0, 26.0));
             self.label(
                 &app.status,
-                rect(94.0, 46.0, 252.0, 26.0),
+                rect(74.0, 46.0, 292.0, 26.0),
                 &self.small,
                 0xe4d9ff,
             );
@@ -1330,16 +1530,17 @@ impl Graphics {
             let radius = wheel::ITEM_RADIUS + 2.0 * highlight;
             self.circle_alpha(p, radius + 7.0, 0xa084fa, 0.11 * highlight);
             self.circle(p, radius, blend(0x292c3e, 0x8060d8, highlight));
-            self.fitted_emoji(app.item_text(*index), p, wheel::ITEM_RADIUS)?;
-            if app
-                .context
-                .is_some_and(|anchor| CATALOG[anchor].text != app.item_text(*index))
+            self.fitted_emoji(app.item_text(*index), p, wheel::ITEM_RADIUS, 1.0)?;
+            if app.favorite_tray
+                || app
+                    .context
+                    .is_some_and(|anchor| CATALOG[anchor].text != app.item_text(*index))
             {
                 self.circle_alpha(p, radius + 1.0, 0x13151f, 0.58 * app.motion.expansion.value);
             }
         }
         let variants = app.variants();
-        if let Some(layout) = app.context_layout() {
+        if let Some(layout) = app.context_layout().filter(|_| !app.favorite_tray) {
             let parent = wheel::item_position(layout.anchor);
             let base = CATALOG[app.context.unwrap()].text;
             for (slot, suggestion) in variants.iter().enumerate() {
@@ -1403,96 +1604,91 @@ impl Graphics {
                 }
             }
         }
-        self.circle(
-            wheel::SEARCH_CENTER,
-            wheel::SEARCH_RADIUS,
-            blend(0x373049, 0x66519d, app.motion.search.value),
-        );
-        if !app.searching {
-            self.brush.SetOpacity(1.0);
-            self.brush.SetColor(&color(0xe4d9ff));
-            self.target.DrawEllipse(
-                &D2D1_ELLIPSE {
-                    point: Vector2 {
-                        X: wheel::SEARCH_CENTER.x - 3.0,
-                        Y: wheel::SEARCH_CENTER.y - 3.0,
-                    },
-                    radiusX: 10.0,
-                    radiusY: 10.0,
-                },
-                &self.brush,
-                2.5,
-                None,
-            );
-            self.target.DrawLine(
-                Vector2 {
-                    X: wheel::SEARCH_CENTER.x + 4.0,
-                    Y: wheel::SEARCH_CENTER.y + 4.0,
-                },
-                Vector2 {
-                    X: wheel::SEARCH_CENTER.x + 15.0,
-                    Y: wheel::SEARCH_CENTER.y + 15.0,
-                },
-                &self.brush,
-                3.0,
-                None,
-            );
-        }
-        for (point, radius, hit, label, active) in [
-            (
-                wheel::FAVORITES_CENTER,
-                14.0,
-                Hit::Favorites,
-                "★",
-                app.favorites_mode,
-            ),
-            (wheel::ADD_CENTER, 12.0, Hit::AddFavorite, "+", false),
-            (
-                wheel::PIN_CENTER,
-                14.0,
-                Hit::Pin,
-                if app.pinned { "Unpin" } else { "Pin" },
-                app.pinned,
-            ),
+        // The last three positions are permanent utilities, including on partial pages.
+        for (slot, hit, active) in [
+            (wheel::FAVORITES_SLOT, Hit::Favorites, app.favorite_tray),
+            (wheel::SEARCH_SLOT, Hit::Search, app.searching),
+            (wheel::PIN_SLOT, Hit::Pin, app.pinned),
         ] {
+            let point = wheel::item_position(slot);
+            let highlight = app.motion.items[slot].value;
             self.circle(
                 point,
-                radius,
-                if active || app.hover == hit {
+                wheel::ITEM_RADIUS + 2.0 * highlight,
+                if active {
                     0x66519d
                 } else {
-                    0x292c3e
+                    blend(0x323047, 0x8060d8, highlight)
                 },
             );
-            self.label(
-                label,
-                rect(
-                    point.x - radius,
-                    point.y - radius,
-                    radius * 2.0,
-                    radius * 2.0,
+            match hit {
+                Hit::Favorites => self.label(
+                    "★",
+                    rect(point.x - 20.0, point.y - 20.0, 40.0, 40.0),
+                    &self.text,
+                    0xe4d9ff,
                 ),
-                if hit == Hit::Pin {
-                    &self.small
-                } else {
-                    &self.text
-                },
-                0xe4d9ff,
-            );
+                Hit::Search => self.magnifier(point),
+                _ => self.label(
+                    if app.pinned { "Unpin" } else { "Pin" },
+                    rect(point.x - 22.0, point.y - 22.0, 44.0, 44.0),
+                    &self.small,
+                    0xe4d9ff,
+                ),
+            }
         }
+        if app.favorite_tray {
+            let layout = app.context_layout().unwrap();
+            for slot in 0..layout.count {
+                let point = wheel::variant_position(layout, slot);
+                let expansion = app.motion.expansion.value;
+                let highlight = app.motion.variants[slot].value;
+                let radius = wheel::VARIANT_RADIUS * (0.75 + 0.25 * expansion) + 2.0 * highlight;
+                self.circle_alpha(
+                    point,
+                    radius,
+                    blend(0x353049, 0x8962e6, highlight),
+                    expansion,
+                );
+                if expansion > 0.08 {
+                    if let Some(text) = app.favorite_values().get(slot) {
+                        self.fitted_emoji(text, point, radius, expansion)?;
+                    } else {
+                        self.label_alpha(
+                            "+",
+                            rect(point.x - 20.0, point.y - 20.0, 40.0, 40.0),
+                            &self.text,
+                            0xe4d9ff,
+                            expansion,
+                        );
+                    }
+                }
+            }
+        }
+        if app.searching {
+            let width = if app.adding_favorite { 264.0 } else { 136.0 };
+            self.pill(rect(
+                wheel::CENTER.x - width / 2.0 - 4.0,
+                wheel::CENTER.y - 19.0,
+                width + 8.0,
+                38.0,
+            ));
+        } else {
+            self.logo();
+        }
+        self.pill(rect(188.0, 334.0, 64.0, 16.0));
+        self.label("•••", rect(188.0, 334.0, 64.0, 16.0), &self.small, 0xaaaabb);
+        self.circle(wheel::CLOSE_CENTER, 9.0, 0x292c3e);
+        self.label("×", rect(251.0, 326.0, 18.0, 18.0), &self.small, 0xaaaabb);
         if app.results.is_empty() {
             self.label(
-                if app.favorites_mode {
-                    "No favorites found · use + to add"
-                } else {
-                    "No matches in the prototype catalog"
-                },
+                "No matches in the prototype catalog",
                 rect(50.0, 350.0, 340.0, 28.0),
                 &self.small,
                 0xb0aec0,
             );
         }
-        if app.context.is_none() && !app.adding_favorite {
+        if app.context_layout().is_none() && !app.adding_favorite {
             for (x, text, hit) in [(20.0, "‹", Hit::Previous), (420.0, "›", Hit::Next)] {
                 self.circle(
                     Point {
@@ -1515,6 +1711,19 @@ impl Graphics {
                 rect(188.0, 439.0, 64.0, 24.0),
                 &self.small,
                 0xa9a6ba,
+            );
+        }
+        if app.favorite_tray {
+            self.pill(rect(180.0, 439.0, 80.0, 24.0));
+            self.label(
+                &format!(
+                    "★ {} / {}",
+                    app.favorite_page + 1,
+                    app.favorites.page_count()
+                ),
+                rect(180.0, 439.0, 80.0, 24.0),
+                &self.small,
+                0xc5a6ff,
             );
         }
         if app.status.starts_with("Favorite") || app.status.starts_with("Could not save") {
@@ -1679,10 +1888,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_HOTKEY if wp.0 == ESCAPE_KEY as usize => {
             if app.searching {
-                app.end_search();
-                app.results = app.search_results("");
-                app.page = 0;
-                app.invalidate();
+                app.close_search();
             } else {
                 app.pending = None;
                 app.hide();
@@ -1746,6 +1952,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_TIMER if wp.0 == ANIMATE => app.animation_frame(),
         WM_TIMER if wp.0 == VERIFY => app.verify_presentation(),
         WM_SETTINGCHANGE => app.motion_preference(),
+        WM_COMMAND if (wp.0 & 0xffff) == SEARCH_CLOSE_ID && (wp.0 >> 16) as u32 == BN_CLICKED => {
+            app.close_search()
+        }
         WM_COMMAND if (wp.0 >> 16) as u32 == EN_CHANGE => app.changed_search(),
         SEARCH_ENTER => {
             if app.adding_favorite {
@@ -1755,12 +1964,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 app.choose(&text);
             }
         }
-        SEARCH_ESCAPE => {
-            app.end_search();
-            app.results = app.search_results("");
-            app.page = 0;
-            app.invalidate();
-        }
+        SEARCH_ESCAPE => app.close_search(),
         FOREGROUND if app.visible && !app.searching && app.pending.is_none() => {
             if let Some(target) = Destination::capture(hwnd) {
                 if app.mouse_origin.is_some() {
@@ -1958,38 +2162,7 @@ pub fn run() -> Result<()> {
         // Install callbacks only after every fallible setup step is complete.
         let setup = (|| -> Result<()> {
             let app = &mut *state;
-            app.search_host = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-                search_class.lpszClassName,
-                w!("Search emojis"),
-                WS_POPUP | WS_CLIPCHILDREN,
-                0,
-                0,
-                94,
-                30,
-                Some(hwnd),
-                None,
-                Some(instance),
-                None,
-            )?;
-            app.edit = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                w!("EDIT"),
-                w!(""),
-                WS_CHILD | WS_BORDER | WINDOW_STYLE(ES_AUTOHSCROLL as u32),
-                0,
-                0,
-                94,
-                30,
-                Some(app.search_host),
-                Some(HMENU(100usize as *mut _)),
-                Some(instance),
-                None,
-            )?;
-            if !SetWindowSubclass(app.edit, Some(edit_proc), 1, hwnd.0 as usize).as_bool() {
-                return Err(Error::from_thread());
-            }
-            SendMessageW(app.edit, EM_SETLIMITTEXT, Some(WPARAM(255)), None);
+            app.create_search_controls(instance, search_class.lpszClassName)?;
             RegisterHotKey(
                 Some(hwnd),
                 HOTKEY,
@@ -2097,22 +2270,91 @@ mod tests {
     }
 
     #[test]
-    fn custom_favorites_are_selectable_and_known_ones_keep_their_variants() {
+    fn custom_favorites_are_selectable_from_a_local_tray_with_an_add_entry() {
         unsafe {
             let mut app = App::new();
             app.motion_enabled = false;
             app.favorites.add("🫠").unwrap();
             app.favorites.add("👍").unwrap();
-            app.favorites_mode = true;
-            app.results = app.search_results("");
-            assert_eq!(app.selection(Hit::Item(0)).as_deref(), Some("🫠"));
-            app.pointer(wheel::item_position(0));
-            assert!(app.context.is_none());
-            app.pointer(wheel::item_position(1));
-            assert_eq!(app.variants().len(), 6);
-            assert_eq!(app.context_layout().unwrap().anchor, 1);
-            app.results = app.search_results("thumb");
-            assert_eq!(app.selection(Hit::Item(0)).as_deref(), Some("👍"));
+            app.open_favorites();
+            assert_eq!(app.context_layout().unwrap().anchor, wheel::FAVORITES_SLOT);
+            assert_eq!(app.context_layout().unwrap().count, 3);
+            let layout = app.context_layout().unwrap();
+            app.pointer(wheel::variant_position(layout, 0));
+            assert_eq!(app.hover, Hit::FavoriteEntry(0));
+            assert_eq!(app.selection(app.hover).as_deref(), Some("🫠"));
+            app.pointer(wheel::variant_position(layout, 2));
+            assert_eq!(app.hover, Hit::AddFavorite);
+            app.searching = true;
+            app.results = app.search_results("sad");
+            app.close_search();
+            assert!(!app.searching);
+            assert!(!app.favorite_tray);
+            assert_eq!(app.items().len(), emorbit::PAGE_SIZE);
+        }
+    }
+
+    #[test]
+    fn native_search_close_button_restores_the_logo_state_without_unpinning() {
+        unsafe {
+            let instance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
+            let root_class = WNDCLASSW {
+                lpfnWndProc: Some(wndproc),
+                hInstance: instance,
+                lpszClassName: w!("EmOrbit.SearchCloseTest"),
+                ..Default::default()
+            };
+            let input_class = WNDCLASSW {
+                lpfnWndProc: Some(search_host_proc),
+                hInstance: instance,
+                lpszClassName: w!("EmOrbit.SearchCloseInputTest"),
+                ..Default::default()
+            };
+            assert_ne!(RegisterClassW(&root_class), 0);
+            assert_ne!(RegisterClassW(&input_class), 0);
+            let app = Box::new(RefCell::new(App::new()));
+            let window = TestWindow(
+                CreateWindowExW(
+                    WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                    root_class.lpszClassName,
+                    w!("Search close test"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    wheel::WIDTH as i32,
+                    wheel::HEIGHT as i32,
+                    None,
+                    None,
+                    Some(instance),
+                    Some((&*app as *const RefCell<App>).cast()),
+                )
+                .unwrap(),
+            );
+            {
+                let mut state = app.borrow_mut();
+                state.hwnd = window.0;
+                state
+                    .create_search_controls(instance, input_class.lpszClassName)
+                    .unwrap();
+                state.pinned = true;
+                let _ = ShowWindow(window.0, SW_SHOWNOACTIVATE);
+                state.begin_search();
+                assert!(state.searching);
+            }
+            let button = app.borrow().search_close;
+            assert!(IsWindow(Some(button)).as_bool());
+            SendMessageW(button, BM_CLICK, None, None);
+            let mut msg = MSG::default();
+            let mut count = 0;
+            while PeekMessageW(&mut msg, Some(window.0), 0, 0, PM_REMOVE).as_bool() {
+                DispatchMessageW(&msg);
+                count += 1;
+                assert!(count < 100);
+            }
+            assert!(!app.borrow().searching);
+            assert!(!app.borrow().adding_favorite);
+            assert!(app.borrow().pinned);
+            assert!(!IsWindowVisible(app.borrow().search_host).as_bool());
         }
     }
 
@@ -2227,7 +2469,7 @@ mod tests {
             assert_eq!(graphics.surface.alpha(0, 0), 0);
             assert_eq!(graphics.surface.alpha(5, 200), 0);
             assert!(
-                (166..180).any(|x| (226..240).any(|y| {
+                (188..200).any(|x| (334..346).any(|y| {
                     let alpha = graphics.surface.alpha(x, y);
                     alpha > 0 && alpha < 240
                 })),
@@ -2237,14 +2479,35 @@ mod tests {
             assert_eq!(graphics.surface.alpha(220, 185), 255);
             let glow_alpha = graphics.surface.alpha(249, 185);
             assert!(glow_alpha > 0 && glow_alpha < 255);
-            let icon = graphics
-                .surface
-                .pixels
-                .add((276 * graphics.surface.width as usize + 227) * 4);
+            let point = wheel::item_position(wheel::SEARCH_SLOT);
             assert!(
-                *icon > 150 && *icon.add(2) > 150,
-                "magnifier stroke must be drawn"
+                ((point.x as usize - 12)..(point.x as usize + 12)).any(|x| {
+                    ((point.y as usize - 12)..(point.y as usize + 12)).any(|y| {
+                        let pixel = graphics
+                            .surface
+                            .pixels
+                            .add((y * graphics.surface.width as usize + x) * 4);
+                        *pixel > 150 && *pixel.add(2) > 150
+                    })
+                }),
+                "search slot must contain its magnifier"
             );
+            let logo_visible = |surface: &Surface| {
+                (196..244).any(|x| {
+                    (250..318).any(|y| {
+                        let pixel = surface.pixels.add((y * surface.width as usize + x) * 4);
+                        *pixel > 150 && *pixel.add(2) > 150
+                    })
+                })
+            };
+            assert!(logo_visible(&graphics.surface));
+            app.searching = true;
+            graphics.draw(&app).unwrap();
+            assert!(
+                !logo_visible(&graphics.surface),
+                "input must hide the central logo"
+            );
+            app.searching = false;
             app.pointer(wheel::item_position(3));
             assert!(app
                 .variants()
@@ -2255,11 +2518,8 @@ mod tests {
             assert_eq!(app.selection(app.hover).as_deref(), Some("😭💔🥀"));
             assert!(app.status.starts_with("Saddest"));
             graphics.draw(&app).unwrap();
-            for point in [
-                wheel::FAVORITES_CENTER,
-                wheel::ADD_CENTER,
-                wheel::PIN_CENTER,
-            ] {
+            for slot in [wheel::FAVORITES_SLOT, wheel::SEARCH_SLOT, wheel::PIN_SLOT] {
+                let point = wheel::item_position(slot);
                 assert_eq!(
                     graphics.surface.alpha(point.x as usize, point.y as usize),
                     255

@@ -5,7 +5,15 @@ use std::{fs, io, path::Path};
 pub struct Favorites {
     pub items: Vec<String>,
 }
+pub const TRAY_PAGE_SIZE: usize = 5;
 impl Favorites {
+    pub fn page_count(&self) -> usize {
+        self.items.len().div_ceil(TRAY_PAGE_SIZE).max(1)
+    }
+    pub fn page(&self, number: usize) -> &[String] {
+        let start = number.saturating_mul(TRAY_PAGE_SIZE).min(self.items.len());
+        &self.items[start..(start + TRAY_PAGE_SIZE).min(self.items.len())]
+    }
     pub fn contains(&self, text: &str) -> bool {
         self.items.iter().any(|s| s == text)
     }
@@ -80,6 +88,12 @@ mod tests {
             assert!(store.add(text).unwrap());
         }
         assert!(!store.add("🫠").unwrap());
+        assert_eq!(store.page_count(), 1);
+        store.add("✨").unwrap();
+        store.add("🔥").unwrap();
+        assert_eq!(store.page_count(), 2);
+        assert_eq!(store.page(0).len(), TRAY_PAGE_SIZE);
+        assert_eq!(store.page(1), &["🔥"]);
         assert!(store.add("plain text").is_err());
         assert!(store.add("😭\n💔").is_err());
         store.save(&path).unwrap();

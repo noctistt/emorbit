@@ -1,13 +1,13 @@
 pub const WIDTH: f32 = 440.0;
 pub const HEIGHT: f32 = 520.0;
 pub const CENTER: Point = Point { x: 220.0, y: 285.0 };
-pub const SLOTS: usize = crate::PAGE_SIZE;
+pub const SLOTS: usize = 12;
+pub const FAVORITES_SLOT: usize = 9;
+pub const SEARCH_SLOT: usize = 10;
+pub const PIN_SLOT: usize = 11;
 pub const ITEM_RADIUS: f32 = 23.0;
-pub const SEARCH_CENTER: Point = Point { x: 220.0, y: 279.0 };
-pub const SEARCH_RADIUS: f32 = 30.0;
-pub const FAVORITES_CENTER: Point = Point { x: 190.0, y: 330.0 };
-pub const ADD_CENTER: Point = Point { x: 220.0, y: 334.0 };
-pub const PIN_CENTER: Point = Point { x: 250.0, y: 330.0 };
+pub const LOGO_RADIUS: f32 = 40.0;
+pub const CLOSE_CENTER: Point = Point { x: 260.0, y: 335.0 };
 pub const ORBIT_RADIUS: f32 = 100.0;
 pub const VARIANT_RADIUS: f32 = 22.0;
 
@@ -27,7 +27,9 @@ pub struct Point {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
     None,
+    Hub,
     Search,
+    FavoriteEntry(usize),
     Pin,
     Favorites,
     AddFavorite,
@@ -42,17 +44,28 @@ pub enum Hit {
 /// Resolve a press and release without turning a drag across toolbar buttons
 /// into an accidental close, pin, or search action. Moving from the centre or
 /// an emoji onto another emoji is a selection gesture; returning to centre
-/// cancels it. A stationary centre click still opens search.
+/// cancels it. The center logo starts selection gestures and dismisses trays.
 pub fn release_target(pressed: Hit, released: Hit) -> Option<Hit> {
     match (pressed, released) {
         (
-            Hit::Search | Hit::Item(_) | Hit::Variant(_) | Hit::None,
-            Hit::Item(_) | Hit::Variant(_),
+            Hit::Hub
+            | Hit::Search
+            | Hit::Favorites
+            | Hit::FavoriteEntry(_)
+            | Hit::Item(_)
+            | Hit::Variant(_)
+            | Hit::None,
+            Hit::Item(_) | Hit::Variant(_) | Hit::FavoriteEntry(_),
         ) => Some(released),
-        (Hit::Search, Hit::Search)
+        (
+            Hit::Hub | Hit::Favorites | Hit::FavoriteEntry(_) | Hit::AddFavorite,
+            Hit::AddFavorite,
+        ) => Some(released),
+        (Hit::Hub, Hit::Search | Hit::Pin) => Some(released),
+        (Hit::Hub, Hit::Hub)
+        | (Hit::Search, Hit::Search)
         | (Hit::Pin, Hit::Pin)
         | (Hit::Favorites, Hit::Favorites)
-        | (Hit::AddFavorite, Hit::AddFavorite)
         | (Hit::Close, Hit::Close)
         | (Hit::Previous, Hit::Previous)
         | (Hit::Next, Hit::Next) => Some(released),
@@ -92,26 +105,23 @@ fn inside(point: Point, centre: Point, radius: f32) -> bool {
 }
 
 pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> Hit {
-    // Fixed hub controls stay reachable while any outward fan is expanded.
-    if (226.0..246.0).contains(&point.y) {
-        if (246.0..274.0).contains(&point.x) {
-            return Hit::Close;
+    if inside(point, CLOSE_CENTER, 9.0) {
+        return Hit::Close;
+    }
+    if (188.0..252.0).contains(&point.x) && (334.0..350.0).contains(&point.y) {
+        return Hit::Drag;
+    }
+    if inside(point, CENTER, LOGO_RADIUS) {
+        return Hit::Hub;
+    }
+    for (slot, hit) in [
+        (FAVORITES_SLOT, Hit::Favorites),
+        (SEARCH_SLOT, Hit::Search),
+        (PIN_SLOT, Hit::Pin),
+    ] {
+        if inside(point, item_position(slot), ITEM_RADIUS + 2.0) {
+            return hit;
         }
-        if (166.0..246.0).contains(&point.x) {
-            return Hit::Drag;
-        }
-    }
-    if inside(point, FAVORITES_CENTER, 14.0) {
-        return Hit::Favorites;
-    }
-    if inside(point, ADD_CENTER, 12.0) {
-        return Hit::AddFavorite;
-    }
-    if inside(point, PIN_CENTER, 14.0) {
-        return Hit::Pin;
-    }
-    if inside(point, SEARCH_CENTER, SEARCH_RADIUS) {
-        return Hit::Search;
     }
     if let Some(layout) = context {
         // Hit regions follow the same expanding positions as rendering.
@@ -124,7 +134,7 @@ pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> H
             }
         }
     }
-    for index in 0..items.min(SLOTS) {
+    for index in 0..items.min(crate::PAGE_SIZE) {
         if inside(point, item_position(index), ITEM_RADIUS + 2.0) {
             return Hit::Item(index);
         }
@@ -218,12 +228,12 @@ mod tests {
 
     #[test]
     fn dragging_back_to_centre_or_outside_cancels_without_toolbar_actions() {
-        for origin in [Hit::Item(0), Hit::Variant(1), Hit::Search] {
+        for origin in [Hit::Item(0), Hit::Variant(1)] {
             assert_eq!(release_target(origin, Hit::None), None);
             assert_eq!(release_target(origin, Hit::Close), None);
             assert_eq!(release_target(origin, Hit::Pin), None);
         }
-        assert_eq!(release_target(Hit::Item(0), Hit::Search), None);
+        assert_eq!(release_target(Hit::Item(0), Hit::Hub), None);
         assert_eq!(release_target(Hit::Pin, Hit::Item(0)), None);
         assert_eq!(release_target(Hit::Search, Hit::Search), Some(Hit::Search));
         assert_eq!(release_target(Hit::Pin, Hit::Pin), Some(Hit::Pin));
@@ -231,7 +241,7 @@ mod tests {
 
     #[test]
     fn every_visible_target_is_reachable() {
-        for i in 0..SLOTS {
+        for i in 0..crate::PAGE_SIZE {
             assert_eq!(hit_test(item_position(i), SLOTS, None), Hit::Item(i));
         }
         for anchor in 0..SLOTS {
@@ -247,7 +257,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(hit_test(CENTER, SLOTS, None), Hit::Search);
+        assert_eq!(hit_test(CENTER, SLOTS, None), Hit::Hub);
         assert_eq!(hit_test(item_position(7), 2, None), Hit::None);
     }
 
@@ -375,19 +385,27 @@ mod tests {
                 progress: 1.0,
             };
             for (point, hit) in [
-                (FAVORITES_CENTER, Hit::Favorites),
-                (ADD_CENTER, Hit::AddFavorite),
-                (PIN_CENTER, Hit::Pin),
-                (SEARCH_CENTER, Hit::Search),
-                (Point { x: 260.0, y: 236.0 }, Hit::Close),
-                (Point { x: 210.0, y: 236.0 }, Hit::Drag),
+                (item_position(FAVORITES_SLOT), Hit::Favorites),
+                (item_position(SEARCH_SLOT), Hit::Search),
+                (item_position(PIN_SLOT), Hit::Pin),
+                (CENTER, Hit::Hub),
+                (CLOSE_CENTER, Hit::Close),
+                (Point { x: 210.0, y: 342.0 }, Hit::Drag),
             ] {
-                assert_eq!(hit_test(point, SLOTS, Some(layout)), hit);
+                assert_eq!(hit_test(point, crate::PAGE_SIZE, Some(layout)), hit);
             }
             let a = item_position(anchor);
             let b = item_position((anchor + 1) % SLOTS);
             assert!((a.x - b.x).hypot(a.y - b.y) > 2.0 * (ITEM_RADIUS + 2.0));
         }
+        assert_eq!(
+            release_target(Hit::Hub, Hit::FavoriteEntry(2)),
+            Some(Hit::FavoriteEntry(2))
+        );
+        assert_eq!(
+            release_target(Hit::Favorites, Hit::AddFavorite),
+            Some(Hit::AddFavorite)
+        );
     }
 
     #[test]
