@@ -35,12 +35,12 @@ The Windows workflow compiles setup and runs packaging/test-installer.ps1 in an 
 * Focus a text field in Notepad first.
 * Tap Ctrl + Alt + Space and release the keys. The picker stays open. Releasing shortcut keys does not select an emoji.
 * Press and hold the primary mouse button in the centre or over an emoji, move onto the desired emoji, then release the mouse button to insert. A normal click also inserts.
-* Hover for 350 milliseconds over an emoji with variants to open its contextual arc. You can keep the mouse button held while exploring the arc; release over the desired variant to insert it.
+* Hover an emoji with variants to open its contextual arc immediately. There is no dwell delay. You can keep the mouse button held while exploring the arc; release over the desired variant to insert it.
 * Suggestions now fan outward beside their parent emoji. Move back to the centre to dismiss the fan. While a fan is open, paging arrows and footer text are hidden to leave space for lower suggestions; use the mouse wheel to change pages.
 * Repeated choices show a small ×2 or ×3 badge instead of overflowing strings. The header previews the actual output on hover. Highlights fade and gently grow, and suggestions expand into position. Windows' client area animation preference is read at startup and on settings changes.
 * Move back to the centre after pressing an emoji, or release outside the targets, to cancel. The unpinned picker closes on cancellation; the pinned picker stays open. A stationary centre click opens Search instead.
 * A drag passing over Pin, Close, or a page arrow does not activate it. Click those controls normally. The primary mouse button respects Windows' swapped button setting.
-* Click Search in the centre to latch the popup open and activate its text field. Type a query; results replace the wheel. Click a result or press Enter to insert the first result on the current page. The search box is limited to 255 UTF-16 units.
+* Click the magnifying glass in the centre to activate its text field. Type a query; results replace the wheel. Click a result or press Enter to insert the first result on the current page. The search box is limited to 255 UTF-16 units.
 * Scroll over the wheel, or click the arrows, to change result pages.
 * Click Pin to keep the wheel open. Click emojis while the external text field remains focused. Click Unpin to return to closing after selection.
 * Drag the header to move the popup. It does not yet remember its position between openings.
@@ -63,6 +63,9 @@ Use a disposable text document. Record app and Windows versions and actual obser
 | Hover each of the eight home emojis | Suggestions appear near that emoji, including bottom and side positions | Pending Windows test |
 | Quick movement between emojis and variants | Smooth highlights with clickable targets matching their visible positions | Pending Windows test |
 | Disable Windows animations | Transitions snap to their endpoints without repeated animation frames | Pending Windows test |
+| Transparent background | Underlying content is visible between solid emoji buttons; gaps pass clicks through | Pending Windows test |
+| Immediate suggestions | Entering an emoji creates its fan without waiting for a dwell timer | Pending Windows test |
+| Search after transparency change | Search popup accepts text and restores external typing focus after selection | Pending Windows test |
 | Pinned wheel and continued typing | Emoji clicks leave the external field usable | Pending Windows test |
 | Pinned target switch | Selecting after switching windows inserts into the current focused destination | Pending Windows test |
 | Search then selection | Focus returns and the selected sequence inserts | Pending Windows test |
@@ -76,7 +79,7 @@ Use a disposable text document. Record app and Windows versions and actual obser
 
 ## Known limitations
 
-The popup currently uses a rectangular opaque dark surface and pointer based placement, not caret avoidance. A native search edit control is intentionally basic. Emoji rendering depends on system font coverage. Complex or protected editors may not accept Unicode SendInput.
+The popup uses per pixel transparency with solid controls and pointer based placement, not caret avoidance. A native search edit in a small owned popup is intentionally basic. Emoji rendering depends on system font coverage. Complex or protected editors may not accept Unicode SendInput. Transparent gaps pass mouse input to the underlying application; hold gestures are tracked by the existing short gesture timer while crossing these gaps.
 
 The destination check compares foreground window and focused control handles. It cannot distinguish every cursor or tab change inside a custom editor that reuses one native control. It does not read the target's document text. Input stops if the captured handles no longer match or modifiers remain held for two seconds. A failed or partial injection is reported without retrying the string.
 
@@ -84,4 +87,4 @@ Pinned state, favorites, recents, positions, and preferred skin tones are not pe
 
 ## Resource measurements
 
-Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop. A 16 millisecond gesture timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. A separate animation timer runs only while finite highlight or expansion transitions are active and stops at rest. The hover timer is cancelled after it fires.
+Use a release build, not cargo run in debug mode. Record private bytes, working set, and CPU while hidden, open, searching, and pinned, then repeat opening and closing. No memory or latency benchmarks have been established. The hidden app uses a blocking message loop. A 16 millisecond gesture timer runs only during an active mouse press that began in the picker or pending insertion. This checks pointer position and primary button release even outside the popup without a global mouse hook or focus stealing capture. A separate animation timer runs only while finite highlight or expansion transitions are active and stops at rest. There is no dwell timer. A Windows native rendering test checks alpha in empty gaps, opaque controls, a partial alpha highlight, vector search icon pixels, and immediate context creation.

@@ -1,6 +1,6 @@
 ; Per user installation. Keep AppId stable across every future version.
 #ifndef AppVersion
-  #define AppVersion "0.1.3"
+  #define AppVersion "0.1.4"
 #endif
 
 [Setup]

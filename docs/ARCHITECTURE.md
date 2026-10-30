@@ -13,6 +13,10 @@ The prototype uses windows 0.62.2 and windows-numerics 0.3.1 with Cargo.lock com
 
 The current popup is event driven and rendered with Direct2D and DirectWrite. Pure catalog, Unicode encoding, and wheel geometry logic live in the library. The native application lives in platform.rs. Its boxed RefCell state outlives the native window; callbacks guard against synchronous reentrancy and defer size refreshes when necessary. The native layer remains a prototype requiring interactive validation.
 
+Transparency uses WS_EX_LAYERED, a premultiplied BGRA DIB, ID2D1DCRenderTarget, and UpdateLayeredWindow. Empty pixels have zero alpha; buttons retain their opacity and highlights use partial alpha. Rendering requests are coalesced through a posted message instead of a continuous paint loop. The backing surface is released when hidden. This CPU bitmap presentation path trades an extra small surface copy for correct per pixel transparency and click through gaps; resource use still needs measurement.
+
+Native text entry lives in a small owned search popup because a child EDIT control cannot paint into the layered bitmap. The wheel remains nonactivating while that popup temporarily owns typing focus. Search completion restores the captured external destination. Live search focus and display scaling require regression testing after this change.
+
 Pure finite transitions live in motion.rs. A short animation timer advances highlight colour/size and local fan expansion, invalidates the window, and stops when all transitions settle. The renderer and hit tester use the same parent anchored fan geometry and expansion progress. Other primary items are dimmed behind an open fan. Animation disablement snaps all transitions and stops the timer. No animation thread, continuous frame loop, or additional dependency is introduced.
 
 ## Suggested boundaries

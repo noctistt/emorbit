@@ -8,7 +8,7 @@ A shortcut tap opens the dial near the pointer and leaves it open after the keys
 
 Releasing a gesture over Pin, Close, or a page arrow must not activate that control unless the press began on the same control. Releasing the shortcut keys never commits a mouse gesture. Only a press originating in the picker starts gesture tracking; ordinary clicks elsewhere do not select anything. Respect swapped primary mouse buttons.
 
-A brief dwell opens a contextual outer arc. Movement through a segment should not immediately open another menu. Use forgiving pointer corridors and stable geometry so the submenu remains reachable.
+Hovering a primary emoji opens its contextual arc immediately, with no dwell timer. A brief expansion animation gives visual continuity without delaying creation of the suggestions. Preserve the parent menu while traversing transparent gaps towards its suggestions. Switching to another primary emoji replaces the fan immediately.
 
 Suggestions form a local outward fan anchored to the parent emoji, rather than a fixed row above the wheel. The fan rotates with its parent and fits inside the existing popup. Dim other primary choices while it is open. Temporarily hide page arrows and footer text where a lower fan needs that space; the header shows the exact selected output and scrolling still changes pages. Returning to the centre dismisses the fan.
 
@@ -36,7 +36,7 @@ Search explicitly activates an input surface. Finish selection by returning to t
 
 ## Placement and appearance
 
-Modern light and dark themes, rounded segments, clear selection states, short animations, and optional transparency. Provide opaque and reduced motion modes. Respect scaling, monitor work areas, and high contrast preferences.
+The prototype uses a transparent background with solid emoji buttons and compact dark backing pills for its header and controls. A magnifying glass drawn with vector geometry replaces the centre Search label. Light themes, an opaque fallback mode, and full high contrast adaptation remain planned. Respect scaling, monitor work areas, and Windows' animation preference.
 
 Choose above or below the caret when its rectangle is available and the layout fits. Otherwise use a predictable pointer or user selected fallback. Positioning cannot guarantee that all underlying content stays unobscured.
 

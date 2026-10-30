@@ -7,7 +7,7 @@ use emorbit::{
     wheel::{self, Hit, Point},
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     mem::size_of,
     sync::atomic::{AtomicPtr, Ordering},
     time::Instant,
@@ -19,6 +19,7 @@ use windows::{
         Graphics::{
             Direct2D::{Common::*, *},
             DirectWrite::*,
+            Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
             Gdi::*,
         },
         System::LibraryLoader::GetModuleHandleW,
@@ -37,7 +38,6 @@ use windows_numerics::Vector2;
 const HOTKEY: i32 = 1;
 const ESCAPE_KEY: i32 = 2;
 const TICK: usize = 1;
-const DWELL: usize = 2;
 const ANIMATE: usize = 3;
 const TRAY: u32 = WM_APP + 1;
 const FOREGROUND: u32 = WM_APP + 2;
@@ -46,6 +46,7 @@ const SEARCH_ENTER: u32 = WM_APP + 4;
 const SEARCH_ESCAPE: u32 = WM_APP + 5;
 const REFRESH_SIZE: u32 = WM_APP + 6;
 const EXIT: u32 = WM_APP + 7;
+const RENDER: u32 = WM_APP + 8;
 static WINDOW: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 #[derive(Clone, Copy)]
@@ -94,7 +95,9 @@ struct Pending {
 
 struct App {
     hwnd: HWND,
+    search_host: HWND,
     edit: HWND,
+    render_queued: Cell<bool>,
     graphics: Option<Graphics>,
     visible: bool,
     pinned: bool,
@@ -119,7 +122,9 @@ impl App {
     fn new() -> Self {
         Self {
             hwnd: HWND::default(),
+            search_host: HWND::default(),
             edit: HWND::default(),
+            render_queued: Cell::new(false),
             graphics: None,
             visible: false,
             pinned: false,
@@ -249,7 +254,14 @@ impl App {
         }
     }
     unsafe fn invalidate(&self) {
-        let _ = InvalidateRect(Some(self.hwnd), None, false);
+        // Layered surfaces are presented explicitly, not by a continuous paint
+        // loop. Coalesce requests from pointer events and finite animations.
+        if !self.hwnd.0.is_null()
+            && !self.render_queued.replace(true)
+            && PostMessageW(Some(self.hwnd), RENDER, WPARAM(0), LPARAM(0)).is_err()
+        {
+            self.render_queued.set(false);
+        }
     }
 
     unsafe fn show(&mut self) {
@@ -316,12 +328,12 @@ impl App {
         self.context = None;
         let _ = KillTimer(Some(self.hwnd), ANIMATE);
         self.motion_running = false;
-        let _ = KillTimer(Some(self.hwnd), DWELL);
         if self.pending.is_none() {
             let _ = KillTimer(Some(self.hwnd), TICK);
         }
         let _ = UnregisterHotKey(Some(self.hwnd), ESCAPE_KEY);
         let _ = ShowWindow(self.edit, SW_HIDE);
+        let _ = ShowWindow(self.search_host, SW_HIDE);
         self.searching = false;
         let _ = ShowWindow(self.hwnd, SW_HIDE);
         // Release device resources when hidden; factories are recreated on demand.
@@ -339,41 +351,53 @@ impl App {
         self.page = 0;
         self.set_context(None);
         self.status = "Type to search · Enter inserts first result".into();
-        SetWindowLongPtrW(
-            self.hwnd,
-            GWL_EXSTYLE,
-            (WS_EX_TOPMOST | WS_EX_TOOLWINDOW).0 as isize,
-        );
-        let _ = SetForegroundWindow(self.hwnd);
         self.position_edit();
         let _ = SetWindowTextW(self.edit, w!(""));
         let _ = ShowWindow(self.edit, SW_SHOW);
+        let _ = ShowWindow(self.search_host, SW_SHOW);
+        let _ = SetForegroundWindow(self.search_host);
         let _ = SetFocus(Some(self.edit));
         self.invalidate();
     }
 
     unsafe fn position_edit(&self) {
         let s = self.dpi as f32 / 96.0;
+        let mut point = POINT {
+            x: (173.0 * s) as i32,
+            y: (269.0 * s) as i32,
+        };
+        let _ = ClientToScreen(self.hwnd, &mut point);
+        let _ = SetWindowPos(
+            self.search_host,
+            Some(HWND_TOPMOST),
+            point.x,
+            point.y,
+            (94.0 * s) as i32,
+            (30.0 * s) as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
         let _ = SetWindowPos(
             self.edit,
             None,
-            (173.0 * s) as i32,
-            (269.0 * s) as i32,
+            0,
+            0,
             (94.0 * s) as i32,
             (30.0 * s) as i32,
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
 
+    unsafe fn owns_search_focus(&self) -> bool {
+        let foreground = GetForegroundWindow();
+        foreground == self.hwnd || foreground == self.search_host
+    }
+
     unsafe fn end_search(&mut self) {
+        let restore = self.owns_search_focus();
         self.searching = false;
         let _ = ShowWindow(self.edit, SW_HIDE);
-        SetWindowLongPtrW(
-            self.hwnd,
-            GWL_EXSTYLE,
-            (WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE).0 as isize,
-        );
-        if GetForegroundWindow() == self.hwnd {
+        let _ = ShowWindow(self.search_host, SW_HIDE);
+        if restore {
             if let Some(target) = self.destination {
                 if IsWindow(Some(target.window)).as_bool() {
                     let _ = SetForegroundWindow(target.window);
@@ -397,10 +421,9 @@ impl App {
             return;
         }
         self.mouse_origin = None;
-        let _ = KillTimer(Some(self.hwnd), DWELL);
         if !self.searching {
             self.destination = Destination::capture(self.hwnd);
-        } else if GetForegroundWindow() != self.hwnd {
+        } else if !self.owns_search_focus() {
             self.end_search();
             self.status = "Search cancelled: focus changed; select again".into();
             self.invalidate();
@@ -522,7 +545,6 @@ impl App {
             return;
         };
         let _ = KillTimer(Some(self.hwnd), TICK);
-        let _ = KillTimer(Some(self.hwnd), DWELL);
         self.refresh_pointer();
         if let Some(target) = wheel::release_target(origin, self.hover) {
             if matches!(target, Hit::Item(_) | Hit::Variant(_))
@@ -551,17 +573,13 @@ impl App {
             return;
         }
         self.hover = hit;
-        let _ = KillTimer(Some(self.hwnd), DWELL);
         if let Hit::Item(index) = hit {
-            if self
+            let context = self
                 .items()
                 .get(index)
-                .is_some_and(|i| !CATALOG[*i].variants.is_empty())
-            {
-                SetTimer(Some(self.hwnd), DWELL, 350, None);
-            } else {
-                self.set_context(None);
-            }
+                .copied()
+                .filter(|i| !CATALOG[*i].variants.is_empty());
+            self.set_context(context);
         }
         if hit == Hit::Search {
             self.set_context(None);
@@ -609,7 +627,6 @@ impl App {
         self.page = (self.page as i32 + delta).rem_euclid(count) as usize;
         self.set_context(None);
         self.hover = Hit::None;
-        let _ = KillTimer(Some(self.hwnd), DWELL);
         self.animate();
     }
 
@@ -624,11 +641,106 @@ impl App {
 }
 
 struct Graphics {
-    target: ID2D1HwndRenderTarget,
+    target: ID2D1DCRenderTarget,
     text: IDWriteTextFormat,
     small: IDWriteTextFormat,
     emoji: IDWriteTextFormat,
     brush: ID2D1SolidColorBrush,
+    // Drop the COM target and brush before releasing their bound GDI surface.
+    surface: Surface,
+}
+
+/// Premultiplied BGRA backing store for a per pixel alpha layered window.
+struct Surface {
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+    pixels: *mut u8,
+    width: i32,
+    height: i32,
+}
+
+impl Surface {
+    unsafe fn new(width: i32, height: i32) -> Result<Self> {
+        let dc = CreateCompatibleDC(None);
+        if dc.0.is_null() {
+            return Err(Error::from_thread());
+        }
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut pixels = std::ptr::null_mut();
+        let bitmap = match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut pixels, None, 0) {
+            Ok(bitmap) => bitmap,
+            Err(error) => {
+                let _ = DeleteDC(dc);
+                return Err(error);
+            }
+        };
+        let previous = SelectObject(dc, HGDIOBJ(bitmap.0));
+        if pixels.is_null() || previous.0.is_null() || previous.0 as isize == -1 {
+            let _ = DeleteObject(HGDIOBJ(bitmap.0));
+            let _ = DeleteDC(dc);
+            return Err(Error::from_thread());
+        }
+        Ok(Self {
+            dc,
+            bitmap,
+            previous,
+            pixels: pixels.cast(),
+            width,
+            height,
+        })
+    }
+
+    unsafe fn present(&self, hwnd: HWND) -> Result<()> {
+        debug_assert!(self.width > 0 && self.height > 0 && !self.pixels.is_null());
+        let origin = POINT::default();
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        // The window has already been sized and positioned by SetWindowPos.
+        // Leaving those pointers null avoids size messages during every frame.
+        UpdateLayeredWindow(
+            hwnd,
+            None,
+            None,
+            None,
+            Some(self.dc),
+            Some(&origin),
+            COLORREF(0),
+            Some(&blend),
+            ULW_ALPHA,
+        )
+    }
+
+    #[cfg(test)]
+    unsafe fn alpha(&self, x: usize, y: usize) -> u8 {
+        assert!(x < self.width as usize && y < self.height as usize);
+        *self.pixels.add((y * self.width as usize + x) * 4 + 3)
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SelectObject(self.dc, self.previous);
+            let _ = DeleteObject(HGDIOBJ(self.bitmap.0));
+            let _ = DeleteDC(self.dc);
+        }
+    }
 }
 
 fn color(rgb: u32) -> D2D1_COLOR_F {
@@ -662,21 +774,18 @@ impl Graphics {
         let write: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
         let mut bounds = RECT::default();
         GetClientRect(hwnd, &mut bounds)?;
-        let target = factory.CreateHwndRenderTarget(
-            &D2D1_RENDER_TARGET_PROPERTIES {
-                dpiX: dpi as f32,
-                dpiY: dpi as f32,
-                ..Default::default()
+        let surface = Surface::new(bounds.right.max(1), bounds.bottom.max(1))?;
+        let target = factory.CreateDCRenderTarget(&D2D1_RENDER_TARGET_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
-            &D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd,
-                pixelSize: D2D_SIZE_U {
-                    width: bounds.right.max(1) as u32,
-                    height: bounds.bottom.max(1) as u32,
-                },
-                presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-            },
-        )?;
+            dpiX: dpi as f32,
+            dpiY: dpi as f32,
+            ..Default::default()
+        })?;
+        target.BindDC(surface.dc, &bounds)?;
+        target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         let format = |font: PCWSTR, size: f32| -> Result<IDWriteTextFormat> {
             let format = write.CreateTextFormat(
                 font,
@@ -698,6 +807,7 @@ impl Graphics {
             text: format(w!("Segoe UI"), 15.0)?,
             small: format(w!("Segoe UI"), 11.0)?,
             emoji: format(w!("Segoe UI Emoji"), 27.0)?,
+            surface,
         })
     }
 
@@ -747,7 +857,13 @@ impl Graphics {
 
     unsafe fn draw(&self, app: &App) -> Result<()> {
         self.target.BeginDraw();
-        self.target.Clear(Some(&color(0x13151f)));
+        self.target.Clear(Some(&D2D1_COLOR_F::default()));
+        // Only controls get backing pills. The rest of the popup is truly
+        // transparent, with antialiased edges and soft alpha highlights.
+        self.pill(rect(16.0, 12.0, 134.0, 36.0));
+        self.pill(rect(340.0, 12.0, 40.0, 36.0));
+        self.pill(rect(388.0, 12.0, 40.0, 36.0));
+        self.pill(rect(12.0, 48.0, 416.0, 24.0));
         self.label(
             "EmOrbit",
             rect(20.0, 12.0, 130.0, 36.0),
@@ -867,11 +983,33 @@ impl Graphics {
             blend(0x373049, 0x66519d, app.motion.search.value),
         );
         if !app.searching {
-            self.label(
-                "Search",
-                rect(173.0, 267.0, 94.0, 36.0),
-                &self.text,
-                0xe4d9ff,
+            self.brush.SetOpacity(1.0);
+            self.brush.SetColor(&color(0xe4d9ff));
+            self.target.DrawEllipse(
+                &D2D1_ELLIPSE {
+                    point: Vector2 {
+                        X: wheel::CENTER.x - 3.0,
+                        Y: wheel::CENTER.y - 3.0,
+                    },
+                    radiusX: 10.0,
+                    radiusY: 10.0,
+                },
+                &self.brush,
+                2.5,
+                None,
+            );
+            self.target.DrawLine(
+                Vector2 {
+                    X: wheel::CENTER.x + 4.0,
+                    Y: wheel::CENTER.y + 4.0,
+                },
+                Vector2 {
+                    X: wheel::CENTER.x + 15.0,
+                    Y: wheel::CENTER.y + 15.0,
+                },
+                &self.brush,
+                3.0,
+                None,
             );
         }
         if app.results.is_empty() {
@@ -883,6 +1021,10 @@ impl Graphics {
             );
         }
         if app.context.is_none() {
+            self.pill(rect(100.0, 440.0, 60.0, 38.0));
+            self.pill(rect(180.0, 447.0, 80.0, 24.0));
+            self.pill(rect(280.0, 440.0, 60.0, 38.0));
+            self.pill(rect(12.0, 484.0, 416.0, 24.0));
             self.label("‹", rect(100.0, 440.0, 60.0, 38.0), &self.text, 0xc5b8ed);
             self.label(
                 &format!("{} / {}", app.page + 1, catalog::page_count(&app.results)),
@@ -898,7 +1040,21 @@ impl Graphics {
                 0xb7afcd,
             );
         }
-        self.target.EndDraw(None, None)
+        self.target.EndDraw(None, None)?;
+        self.surface.present(app.hwnd)
+    }
+
+    unsafe fn pill(&self, bounds: D2D_RECT_F) {
+        self.brush.SetOpacity(0.94);
+        self.brush.SetColor(&color(0x171923));
+        self.target.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: bounds,
+                radiusX: 12.0,
+                radiusY: 12.0,
+            },
+            &self.brush,
+        );
     }
 }
 
@@ -943,6 +1099,27 @@ unsafe extern "system" fn edit_proc(
     DefSubclassProc(hwnd, msg, wp, lp)
 }
 
+// Keep the native edit in a tiny owned popup. A child EDIT cannot paint itself
+// into the premultiplied bitmap presented by UpdateLayeredWindow.
+unsafe extern "system" fn search_host_proc(
+    hwnd: HWND,
+    msg: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+) -> LRESULT {
+    if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
+        if msg == WM_COMMAND {
+            let _ = PostMessageW(Some(owner), WM_COMMAND, wp, lp);
+            return LRESULT(0);
+        }
+        if msg == WM_CLOSE {
+            let _ = PostMessageW(Some(owner), SEARCH_ESCAPE, WPARAM(0), LPARAM(0));
+            return LRESULT(0);
+        }
+    }
+    DefWindowProcW(hwnd, msg, wp, lp)
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let create = &*(lp.0 as *const CREATESTRUCTW);
@@ -971,18 +1148,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     };
     let app = &mut *state;
     match msg {
-        WM_MOUSEACTIVATE if !app.searching => return LRESULT(MA_NOACTIVATE as isize),
+        WM_MOUSEACTIVATE => return LRESULT(MA_NOACTIVATE as isize),
         WM_ERASEBKGND => return LRESULT(1),
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut paint);
-            if let Err(error) = app.paint() {
-                app.graphics = None;
-                app.status = format!("Rendering failed: {error}");
-                // No recursive invalidation loop on device loss; the next user
-                // interaction recreates resources and requests another paint.
-            }
             let _ = EndPaint(hwnd, &paint);
+            if app.visible {
+                app.invalidate();
+            }
+            return LRESULT(0);
+        }
+        RENDER => {
+            app.render_queued.set(false);
+            if app.visible {
+                if let Err(error) = app.paint() {
+                    app.end_search();
+                    app.hide();
+                    report_error(&format!("Could not render the transparent wheel: {error}"));
+                }
+            }
             return LRESULT(0);
         }
         WM_HOTKEY if wp.0 == HOTKEY as usize => {
@@ -1019,11 +1204,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             });
         }
         WM_MOUSELEAVE if app.mouse_origin.is_none() => {
-            app.set_context(None);
-            app.pointer(Point {
-                x: -100.0,
-                y: -100.0,
-            });
+            // Alpha-zero gaps pass mouse messages to the underlying app. Keep
+            // the fan available while crossing those gaps towards a variant.
+            let mut cursor = POINT::default();
+            let inside = GetCursorPos(&mut cursor).is_ok()
+                && ScreenToClient(hwnd, &mut cursor).as_bool()
+                && cursor.x >= 0
+                && cursor.y >= 0
+                && (cursor.x as f32) < wheel::WIDTH * app.dpi as f32 / 96.0
+                && (cursor.y as f32) < wheel::HEIGHT * app.dpi as f32 / 96.0;
+            if !inside {
+                app.set_context(None);
+            }
+            app.refresh_pointer();
         }
         WM_LBUTTONDOWN if app.hover == Hit::Drag => {
             app.mouse_origin = None;
@@ -1037,6 +1230,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 Some(WPARAM(HTCAPTION as usize)),
                 None,
             );
+            if app.searching {
+                app.position_edit();
+            }
         }
         WM_LBUTTONDOWN => app.begin_mouse(),
         WM_LBUTTONUP => app.finish_mouse(),
@@ -1047,12 +1243,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }),
         WM_TIMER if wp.0 == TICK => app.tick(),
         WM_TIMER if wp.0 == ANIMATE => app.animation_frame(),
-        WM_TIMER if wp.0 == DWELL => {
-            let _ = KillTimer(Some(hwnd), DWELL);
-            if let Hit::Item(i) = app.hover {
-                app.set_context(app.items().get(i).copied());
-            }
-        }
         WM_SETTINGCHANGE => app.motion_preference(),
         WM_COMMAND if (wp.0 >> 16) as u32 == EN_CHANGE => app.changed_search(),
         SEARCH_ENTER => {
@@ -1071,7 +1261,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 if app.mouse_origin.is_some() {
                     app.mouse_origin = None;
                     let _ = KillTimer(Some(hwnd), TICK);
-                    let _ = KillTimer(Some(hwnd), DWELL);
                     app.status = "Gesture cancelled: destination changed".into();
                     if !app.pinned {
                         app.hide();
@@ -1114,6 +1303,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             app.graphics = None;
             app.invalidate();
         }
+        WM_MOVE if app.searching => app.position_edit(),
         REFRESH_SIZE => {
             let dpi = GetDpiForWindow(hwnd).max(96);
             if dpi != app.dpi {
@@ -1196,12 +1386,22 @@ pub fn run() -> Result<()> {
         if RegisterClassW(&class) == 0 {
             return Err(Error::from_thread());
         }
+        let search_class = WNDCLASSW {
+            lpfnWndProc: Some(search_host_proc),
+            hInstance: instance,
+            lpszClassName: w!("EmOrbit.Search"),
+            hCursor: LoadCursorW(None, IDC_IBEAM)?,
+            ..Default::default()
+        };
+        if RegisterClassW(&search_class) == 0 {
+            return Err(Error::from_thread());
+        }
         let app = Box::new(RefCell::new(App::new()));
         // Hold the borrow during creation so synchronous setup messages cannot
         // access an incompletely initialized App.
         let mut state = app.borrow_mut();
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
             class.lpszClassName,
             w!("EmOrbit"),
             WS_POPUP | WS_CLIPCHILDREN,
@@ -1220,6 +1420,20 @@ pub fn run() -> Result<()> {
         // Install callbacks only after every fallible setup step is complete.
         let setup = (|| -> Result<()> {
             let app = &mut *state;
+            app.search_host = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                search_class.lpszClassName,
+                w!("Search emojis"),
+                WS_POPUP | WS_CLIPCHILDREN,
+                0,
+                0,
+                94,
+                30,
+                Some(hwnd),
+                None,
+                Some(instance),
+                None,
+            )?;
             app.edit = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 w!("EDIT"),
@@ -1229,7 +1443,7 @@ pub fn run() -> Result<()> {
                 0,
                 94,
                 30,
-                Some(hwnd),
+                Some(app.search_host),
                 Some(HMENU(100usize as *mut _)),
                 Some(instance),
                 None,
@@ -1319,5 +1533,83 @@ pub fn report_error(message: &str) {
             w!("EmOrbit"),
             MB_OK | MB_ICONERROR,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe extern "system" fn test_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        DefWindowProcW(hwnd, msg, wp, lp)
+    }
+
+    struct TestWindow(HWND);
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = DestroyWindow(self.0);
+            }
+        }
+    }
+
+    #[test]
+    fn native_surface_has_transparent_gaps_solid_controls_and_a_search_icon() {
+        unsafe {
+            let instance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(test_proc),
+                hInstance: instance,
+                lpszClassName: w!("EmOrbit.RenderTest"),
+                ..Default::default()
+            };
+            assert_ne!(RegisterClassW(&class), 0);
+            let window = TestWindow(
+                CreateWindowExW(
+                    WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                    class.lpszClassName,
+                    w!("EmOrbit render test"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    wheel::WIDTH as i32,
+                    wheel::HEIGHT as i32,
+                    None,
+                    None,
+                    Some(instance),
+                    None,
+                )
+                .unwrap(),
+            );
+            let mut app = App::new();
+            app.hwnd = window.0;
+            app.visible = true;
+            app.motion_enabled = false;
+            // No wait or dwell message is needed to create the parent context.
+            app.pointer(wheel::item_position(2));
+            assert_eq!(app.context, Some(2));
+            assert_eq!(app.motion.expansion.value, 1.0);
+            app.set_context(None);
+            for item in &mut app.motion.items {
+                item.reset(0.0);
+            }
+            app.motion.items[0].reset(1.0);
+            let graphics = Graphics::new(window.0, 96).unwrap();
+            graphics.draw(&app).unwrap();
+            assert_eq!(graphics.surface.alpha(0, 0), 0);
+            assert_eq!(graphics.surface.alpha(5, 200), 0);
+            assert_eq!(graphics.surface.alpha(220, 285), 255);
+            assert_eq!(graphics.surface.alpha(220, 185), 255);
+            let glow_alpha = graphics.surface.alpha(260, 185);
+            assert!(glow_alpha > 0 && glow_alpha < 255);
+            let icon = graphics
+                .surface
+                .pixels
+                .add((282 * graphics.surface.width as usize + 227) * 4);
+            assert!(
+                *icon > 150 && *icon.add(2) > 150,
+                "magnifier stroke must be drawn"
+            );
+        }
     }
 }
