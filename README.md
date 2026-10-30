@@ -2,17 +2,25 @@
 
 An emoji wheel, always within reach.
 
-EmOrbit is a planned lightweight Windows emoji picker built around a radial dial. Select an emoji with a gesture, explore contextual variants, or pin the wheel while chatting.
+EmOrbit is a lightweight Windows emoji picker being built around a radial dial. Select an emoji with a gesture, explore contextual variants, or pin the wheel while chatting.
 
 ## Project status
 
-Design and planning. There is no working application or downloadable release yet. The features below describe the intended product, not shipped capabilities.
+Experimental native prototype. The implementation includes a radial wheel with a floating transparent background, immediate parent anchored suggestion fans, animated highlights, an icon search button, local search, paging, pinning, a tray icon, and guarded Unicode insertion. It has a small catalog of 29 entries. Early user testing confirmed emoji insertion and mouse release selection; broader compatibility, visual polish, and resource use still require Windows testing. There is no stable release yet.
+
+## Install
+
+Open [Releases](https://github.com/noctistt/emorbit/releases), choose the newest Windows preview, and download **EmOrbit-Setup.exe** directly. Run setup, then launch EmOrbit from Start to open the wheel. The dial has nine emoji slots plus permanent Favorites, Search, and Pin buttons on its outer ring. Hover or click ★ to open a nearby favorites tray; its + entry accepts pasted emojis and combinations. Scroll while the tray is open to browse more favorites. Search opens a central textbox with its own × close button. The native EmOrbit orbit logo fills the center whenever search is closed. Press Enter to save pasted favorites. Right click a dial emoji or suggestion to save it; right click a favorite to remove it. Favorites survive restarts. Side arrows and the mouse wheel change pages. While holding a selection gesture, move to the far left or right to turn one page, return toward the center to rearm, then release over an emoji to insert. The tray icon menu can switch between floating and solid backgrounds. Stronger reactions appear automatically beside normal suggestions, with readable labels such as Sadder and Saddest. Hover previews the complete emoji combination; release inserts it. Skin tone variants remain available for hands. Tap **Ctrl + Alt + Space** to open the wheel.
+
+Setup installs for your Windows user, includes an uninstaller, and updates the same installation when a newer setup is run. ZIP extraction is not required. The current target is Windows 11 x64. Builds are unsigned previews, not stable releases. Automatic update downloads are not implemented.
+
+See [running and testing](docs/TESTING.md) for source builds, controls, and known limitations. The list below describes the full intended product, including features not implemented yet.
 
 ## Planned experience
 
-* Hold a configurable activation shortcut, move toward an emoji, and release to insert.
-* Pause over a selection to reveal an outer arc with related expressions, repeated versions, or supported skin tones.
-* Click Search in the centre and type to replace the wheel contents with search results.
+* Tap an activation shortcut to open, then hold the primary mouse button, move toward an emoji, and release the mouse button to insert.
+* Hover over a selection to reveal its outer arc immediately, with related expressions, repeated versions, or supported skin tones.
+* Click the magnifying glass on the ring and type to replace the wheel contents with search results.
 * Pin the picker to keep it visible while inserting multiple emojis.
 * Preserve the original typing destination and avoid covering the writing area when its position can be detected.
 * Browse the emoji collection through categories, result pages, and search.
@@ -23,11 +31,14 @@ Rust with native Windows APIs, Direct2D for the interface, and DirectWrite for t
 
 Memory usage and application compatibility have not been measured. Emoji appearance and glyph coverage depend on the Windows fonts available.
 
+The current shortcut is Ctrl + Alt + Space. Release those keys after opening; selection uses the mouse button. You can also click an emoji normally. Configurable shortcuts remain planned.
+
 ## Documentation
 
 * [Interaction design](docs/DESIGN.md)
 * [Architecture and validation](docs/ARCHITECTURE.md)
 * [Roadmap](docs/ROADMAP.md)
+* [Running and testing](docs/TESTING.md)
 * [Contributing](CONTRIBUTING.md)
 
 ## License

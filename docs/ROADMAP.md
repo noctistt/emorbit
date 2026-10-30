@@ -1,14 +1,14 @@
 # Roadmap
 
-All items are planned and incomplete.
+The first native implementation now exists. Implementation is not the same as verified user behaviour: interactive Windows acceptance checks remain pending in TESTING.md. Later milestones describe the full intended product.
 
 ## 1. Windows integration proof
 
-* Establish a minimal Rust application and documented Windows build.
-* Open and dismiss a popup using a configurable shortcut.
-* Insert a complete Unicode sequence into a captured destination.
-* Prove pinned selection and search focus transitions.
-* Record compatibility and resource measurements.
+* Implemented: Rust scaffold, native renderer, small catalog, wheel geometry, search, contextual variants, pinning, tray controls, and guarded input path.
+* Implemented: fixed Ctrl + Alt + Space shortcut and documented Windows CI build. Shortcut configuration remains future work.
+* Verified in the development container: pure logic tests and Windows target type checking; see TESTING.md for current validation boundaries.
+* Pending: interactive insertion, pinned selection, search focus transitions, mixed DPI behaviour, and appearance on Windows.
+* Pending: compatibility and resource measurements.
 
 ## 2. Radial interaction
 
@@ -34,6 +34,7 @@ All items are planned and incomplete.
 ## 5. Distribution
 
 * Automate Windows builds and appropriate checks.
+* Implemented: Inno Setup installer for the current Windows user, Start menu shortcut, optional desktop shortcut, uninstaller, and stable update location. Windows CI tests installation, repeated installation, and removal before publishing a preview installer. Live upgrade behaviour and wizard appearance still require user testing.
 * Publish installation instructions and signed releases when signing is available.
 * Include dependency and dataset notices.
 * Publish measured resource use and known limitations.

@@ -9,13 +9,21 @@
 * Local preference files for favourites, recent entries, skin tone, placement, and shortcut configuration.
 * A locally searchable Unicode emoji catalog with reviewed licensing and provenance.
 
-Dependency versions, minimum Windows version, packaging, and installation method are not yet selected. No Rust application or build commands exist in the repository yet.
+The prototype uses windows 0.62.2 and windows-numerics 0.3.1 with Cargo.lock committed for reproducible resolution. See TESTING.md for build commands. Windows x64 builds run in GitHub Actions. The initial target is Windows 11 x64; broader compatibility remains to be validated. Inno Setup packages the executable into an unsigned installer for the current Windows user, with a stable AppId, Start menu shortcut, optional desktop shortcut, and uninstaller. The workflow tests installation, reinstallation, and removal before publishing a preview installer. There is no automatic updater.
+
+The current popup is event driven and rendered with Direct2D and DirectWrite. Pure catalog, Unicode encoding, and wheel geometry logic live in the library. The native application lives in platform.rs. Its boxed RefCell state outlives the native window; callbacks guard against synchronous reentrancy and defer size refreshes when necessary. The native layer remains a prototype requiring interactive validation.
+
+Transparency uses WS_EX_LAYERED, a premultiplied BGRA DIB, ID2D1DCRenderTarget, and UpdateLayeredWindow. Empty pixels have zero alpha; buttons retain their opacity and highlights use partial alpha. Rendering requests are coalesced through a posted message instead of a continuous paint loop. The backing surface is released when hidden. This CPU bitmap presentation path trades an extra small surface copy for correct per pixel transparency and click through gaps; resource use still needs measurement.
+
+Native text entry lives in a small owned search popup because a child EDIT control cannot paint into the layered bitmap. The wheel remains nonactivating while that popup temporarily owns typing focus. Search completion restores the captured external destination. Live search focus and display scaling require regression testing after this change.
+
+Pure finite transitions live in motion.rs. A short animation timer advances highlight colour/size and local fan expansion, invalidates the window, and stops when all transitions settle. The renderer and hit tester use the same parent anchored fan geometry and expansion progress. Other primary items are dimmed behind an open fan. Animation disablement snaps all transitions and stops the timer. No animation thread, continuous frame loop, or additional dependency is introduced.
 
 ## Suggested boundaries
 
 Keep geometry and hit testing, interaction state, emoji sequences and search, preferences, Windows focus and insertion, and rendering separate. Pure logic should be testable without Windows.
 
-Represent states explicitly: hidden, quick selection, contextual selection, persistent search, and pinned. Prevent key release after entering search from accidentally committing a gesture.
+Represent states explicitly: hidden, quick selection, contextual selection, persistent search, and pinned. Opening is a shortcut tap; selection is primary mouse press, movement, and mouse release. Keyboard release does not commit selection. Track the press origin separately from hover so toolbar controls cannot activate when crossed during a selection drag. While a gesture is active, sample the actual pointer and primary mouse button state on a short timer, including outside the popup. Stop that timer after release, cancellation, or hiding. Ignore duplicate mouse up delivery after a timer already processed the release.
 
 ## First technical proof
 
