@@ -49,6 +49,33 @@ const EXIT: u32 = WM_APP + 7;
 const RENDER: u32 = WM_APP + 8;
 static WINDOW: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
+// Keep a small local diagnostic log without recording searches or inserted text.
+fn diagnostic(message: &str) {
+    use std::io::Write;
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(local).join("EmOrbit");
+    if std::fs::create_dir_all(&directory).is_err() {
+        return;
+    }
+    let path = directory.join("emorbit.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 262_144) {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = writeln!(file, "{now} {message}");
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Destination {
     window: HWND,
@@ -265,6 +292,7 @@ impl App {
     }
 
     unsafe fn show(&mut self) {
+        diagnostic("Opening wheel");
         self.destination = Destination::capture(self.hwnd);
         self.visible = true;
         self.mouse_origin = None;
@@ -299,7 +327,7 @@ impl App {
                 info.rcWork.bottom,
             ],
         );
-        let _ = SetWindowPos(
+        let positioned = SetWindowPos(
             self.hwnd,
             Some(HWND_TOPMOST),
             x,
@@ -308,6 +336,9 @@ impl App {
             height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
+        if let Err(error) = positioned {
+            diagnostic(&format!("Window positioning failed: {error}"));
+        }
         // Escape is registered only while visible and is released on dismissal.
         if RegisterHotKey(
             Some(self.hwnd),
@@ -322,7 +353,12 @@ impl App {
         self.invalidate();
     }
 
+    #[track_caller]
     unsafe fn hide(&mut self) {
+        diagnostic(&format!(
+            "Hiding wheel at {}",
+            std::panic::Location::caller()
+        ));
         self.visible = false;
         self.mouse_origin = None;
         self.context = None;
@@ -631,11 +667,21 @@ impl App {
     }
 
     unsafe fn paint(&mut self) -> Result<()> {
-        if self.graphics.is_none() {
+        let first_frame = self.graphics.is_none();
+        if first_frame {
             self.graphics = Some(Graphics::new(self.hwnd, self.dpi)?);
         }
         let graphics = self.graphics.as_ref().unwrap();
         graphics.draw(self)?;
+        if first_frame {
+            diagnostic(&format!(
+                "Presented wheel: {}x{}, DPI {}, window visible {}",
+                graphics.surface.width,
+                graphics.surface.height,
+                self.dpi,
+                IsWindowVisible(self.hwnd).as_bool()
+            ));
+        }
         Ok(())
     }
 }
@@ -1369,9 +1415,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 }
 
 pub fn run() -> Result<()> {
+    diagnostic(concat!("Starting EmOrbit ", env!("CARGO_PKG_VERSION")));
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         if let Ok(existing) = FindWindowW(w!("EmOrbit.Prototype"), None) {
+            diagnostic("Requesting existing instance to open");
             PostMessageW(Some(existing), SHOW, WPARAM(0), LPARAM(0))?;
             return Ok(());
         }
@@ -1494,6 +1542,10 @@ pub fn run() -> Result<()> {
             app.borrow_mut().status =
                 "Foreground tracking unavailable; reopen for each destination".into();
         }
+        // Launching from Setup or the Start menu must visibly open the picker.
+        // Posting after setup lets native creation and sizing messages settle.
+        diagnostic("Initialized tray and hotkey; opening initial wheel");
+        PostMessageW(Some(hwnd), SHOW, WPARAM(0), LPARAM(0))?;
         let mut msg = MSG::default();
         let loop_result = loop {
             let result = GetMessageW(&mut msg, None, 0, 0).0;
@@ -1520,6 +1572,7 @@ pub fn run() -> Result<()> {
 }
 
 pub fn report_error(message: &str) {
+    diagnostic(&format!("Error: {message}"));
     let message: Vec<u16> = format!(
         "EmOrbit could not start.\n\n{message}\n\nThe shortcut may already be used by another app."
     )
