@@ -205,12 +205,44 @@ pub fn intensity(text: &str) -> Option<Intensity> {
         "😀" | "😊" => (&["😊", "😄✨", "🤩🎉✨"], &["Happy", "Happier", "Happiest"]),
         "🎉" => (
             &["🎉", "🥳🎊", "🥳🎉🎊"],
-            &["Celebrate", "Party", "Party time"],
+            &["Celebrate", "Party", "Go wild"],
         ),
         "🔥" => (&["🔥", "🔥💥", "🔥💥🚀"], &["Hot", "Hotter", "On fire"]),
         _ => return None,
     };
     Some(Intensity { choices, labels })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Suggestion {
+    pub text: &'static str,
+    pub label: Option<&'static str>,
+}
+
+/// Keep normal variants and mix in two stronger, explicitly named reactions.
+pub fn suggestions(emoji: &Emoji) -> Vec<Suggestion> {
+    let levels = intensity(emoji.text);
+    let mut choices: Vec<_> = emoji
+        .variants
+        .iter()
+        .take(if levels.is_some() { 4 } else { 6 })
+        .map(|text| Suggestion { text, label: None })
+        .collect();
+    if let Some(levels) = levels {
+        if choices.is_empty() {
+            choices.push(Suggestion {
+                text: emoji.text,
+                label: None,
+            });
+        }
+        for i in 1..3 {
+            choices.push(Suggestion {
+                text: levels.choices[i],
+                label: Some(levels.labels[i]),
+            });
+        }
+    }
+    choices
 }
 
 /// All query words must match; an empty query preserves the home ordering.
@@ -272,6 +304,26 @@ mod tests {
         assert_eq!(intensity("😭").unwrap().choices[2], "😭💔🥀");
         assert!(search("angry").len() >= 3);
         assert!(intensity("👍").is_none());
+    }
+
+    #[test]
+    fn normal_suggestions_mix_named_reactions_without_changing_skin_tones() {
+        for emoji in CATALOG {
+            let choices = suggestions(emoji);
+            assert!(choices.len() <= 6);
+            if let Some(levels) = intensity(emoji.text) {
+                assert!(choices
+                    .iter()
+                    .any(|s| s.text == levels.choices[1] && s.label == Some(levels.labels[1])));
+                assert!(choices
+                    .iter()
+                    .any(|s| s.text == levels.choices[2] && s.label == Some(levels.labels[2])));
+            }
+        }
+        let thumbs = suggestions(&CATALOG[2]);
+        assert_eq!(thumbs.len(), 6);
+        assert!(thumbs.iter().all(|s| s.label.is_none()));
+        assert_eq!(thumbs[5].text, "👍🏿");
     }
 
     #[test]

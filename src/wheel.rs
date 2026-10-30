@@ -23,7 +23,6 @@ pub enum Hit {
     None,
     Search,
     Pin,
-    Intensity,
     Close,
     Previous,
     Next,
@@ -44,7 +43,6 @@ pub fn release_target(pressed: Hit, released: Hit) -> Option<Hit> {
         ) => Some(released),
         (Hit::Search, Hit::Search)
         | (Hit::Pin, Hit::Pin)
-        | (Hit::Intensity, Hit::Intensity)
         | (Hit::Close, Hit::Close)
         | (Hit::Previous, Hit::Previous)
         | (Hit::Next, Hit::Next) => Some(released),
@@ -85,16 +83,13 @@ fn inside(point: Point, centre: Point, radius: f32) -> bool {
 
 pub fn hit_test(point: Point, items: usize, context: Option<ContextLayout>) -> Hit {
     if (12.0..48.0).contains(&point.y) {
-        if (340.0..380.0).contains(&point.x) {
+        if (240.0..282.0).contains(&point.x) {
             return Hit::Pin;
         }
-        if (388.0..428.0).contains(&point.x) {
+        if (292.0..332.0).contains(&point.x) {
             return Hit::Close;
         }
-        if (170.0..300.0).contains(&point.x) {
-            return Hit::Intensity;
-        }
-        if (16.0..160.0).contains(&point.x) {
+        if (100.0..234.0).contains(&point.x) {
             return Hit::Drag;
         }
     }
@@ -173,15 +168,6 @@ mod tests {
         assert_eq!(release_target(Hit::Pin, Hit::Item(0)), None);
         assert_eq!(release_target(Hit::Search, Hit::Search), Some(Hit::Search));
         assert_eq!(release_target(Hit::Pin, Hit::Pin), Some(Hit::Pin));
-        assert_eq!(
-            release_target(Hit::Intensity, Hit::Intensity),
-            Some(Hit::Intensity)
-        );
-        assert_eq!(release_target(Hit::Item(0), Hit::Intensity), None);
-        assert_eq!(
-            hit_test(Point { x: 220.0, y: 30.0 }, 8, None),
-            Hit::Intensity
-        );
     }
 
     #[test]

@@ -10,7 +10,7 @@ Experimental native prototype. The implementation includes a radial wheel with a
 
 ## Install
 
-Open [Releases](https://github.com/noctistt/emorbit/releases), choose the newest Windows preview, and download **EmOrbit-Setup.exe** directly. Run setup, then launch EmOrbit from Start to open the wheel. The tray icon menu can switch between floating and solid backgrounds. Click **Intensity** to show three expressive reaction levels for supported emotions; switch it off for standard variants and skin tones. Tap **Ctrl + Alt + Space** to open the wheel.
+Open [Releases](https://github.com/noctistt/emorbit/releases), choose the newest Windows preview, and download **EmOrbit-Setup.exe** directly. Run setup, then launch EmOrbit from Start to open the wheel. The tray icon menu can switch between floating and solid backgrounds. Stronger reactions appear automatically beside normal suggestions, with readable labels such as Sadder and Saddest. Hover previews the complete emoji combination; release inserts it. Skin tone variants remain available for hands. Tap **Ctrl + Alt + Space** to open the wheel.
 
 Setup installs for your Windows user, includes an uninstaller, and updates the same installation when a newer setup is run. ZIP extraction is not required. The current target is Windows 11 x64. Builds are unsigned previews, not stable releases. Automatic update downloads are not implemented.
 
