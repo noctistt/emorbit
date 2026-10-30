@@ -9,7 +9,7 @@
 * Local preference files for favourites, recent entries, skin tone, placement, and shortcut configuration.
 * A locally searchable Unicode emoji catalog with reviewed licensing and provenance.
 
-The prototype uses windows 0.62.2 and windows-numerics 0.3.1 with Cargo.lock committed for reproducible resolution. See TESTING.md for build commands. Windows x64 builds run in GitHub Actions. The initial target is Windows 11 x64; broader compatibility and minimum supported versions remain to be validated. Packaging is currently an unsigned executable in a CI artifact, not an installer.
+The prototype uses windows 0.62.2 and windows-numerics 0.3.1 with Cargo.lock committed for reproducible resolution. See TESTING.md for build commands. Windows x64 builds run in GitHub Actions. The initial target is Windows 11 x64; broader compatibility remains to be validated. Inno Setup packages the executable into an unsigned installer for the current Windows user, with a stable AppId, Start menu shortcut, optional desktop shortcut, and uninstaller. The workflow tests installation, reinstallation, and removal before publishing a preview installer. There is no automatic updater.
 
 The current popup is event driven and rendered with Direct2D and DirectWrite. Pure catalog, Unicode encoding, and wheel geometry logic live in the library. The native application lives in platform.rs. Its boxed RefCell state outlives the native window; callbacks guard against synchronous reentrancy and defer size refreshes when necessary. The native layer remains a prototype requiring interactive validation.
 

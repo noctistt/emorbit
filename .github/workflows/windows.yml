@@ -2,7 +2,7 @@ name: Windows prototype
 
 on:
   push:
-    branches: [main]
+    branches: [main, prototype/native-wheel]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -27,6 +27,31 @@ jobs:
         run: cargo test --locked
       - name: Build native executable
         run: cargo build --locked --release
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install Inno Setup' }
+          }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          & $compiler "/DAppVersion=$version" packaging/emorbit.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+      - name: Test installer and uninstaller
+        shell: pwsh
+        run: ./packaging/test-installer.ps1
+      - name: Installer checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/EmOrbit-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  EmOrbit-Setup.exe" | Set-Content dist/EmOrbit-Setup.exe.sha256 -Encoding ascii
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: EmOrbit-Setup
+          path: dist/EmOrbit-Setup.exe*
+          if-no-files-found: error
       - name: Upload prototype
         uses: actions/upload-artifact@v4
         with:
@@ -37,3 +62,36 @@ jobs:
             LICENSE
             docs/TESTING.md
           if-no-files-found: error
+
+  publish-preview:
+    name: Publish downloadable setup
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: EmOrbit-Setup
+          path: dist
+      - name: Publish preview installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EMORBIT_COMMIT: ${{ github.sha }}
+          EMORBIT_TAG: preview-${{ github.run_number }}
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          Experimental Windows 11 x64 preview.
+
+          Download EmOrbit-Setup.exe directly and run it. Setup installs for your Windows user, creates a Start menu shortcut, and includes an uninstaller. Install a newer setup to update the same installation. No ZIP extraction or administrator access is needed.
+
+          Tap Ctrl + Alt + Space to open the wheel. Hold the primary mouse button, move to an emoji or variant, and release to insert. Use Pin to keep it visible.
+
+          The app and installer are unsigned. The catalog currently contains 24 entries; this remains a prototype.
+          EOF
+          gh release create "$EMORBIT_TAG" dist/EmOrbit-Setup.exe dist/EmOrbit-Setup.exe.sha256 \
+            --target "$EMORBIT_COMMIT" --prerelease --title "EmOrbit Windows preview $EMORBIT_TAG" \
+            --notes-file release-notes.md

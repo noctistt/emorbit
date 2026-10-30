@@ -16,9 +16,19 @@ The application starts hidden with a standard placeholder tray icon. It does not
 
 ## Download a CI build
 
+For normal use, download **EmOrbit-Setup.exe** directly from the latest preview on the repository Releases page. Run it once and use the Start menu shortcut. There is an optional desktop shortcut, and uninstall is available in Windows Settings. Setup installs into your local Programs folder without requesting administrator access. Running a newer setup updates that same installation. Setup asks a running EmOrbit to exit gracefully before replacement; if that fails, close it from the tray and retry.
+
+Both the app and installer are unsigned. There is no automatic updater or stable release yet. Preview releases include a SHA256 checksum file.
+
 Open the repository Actions tab, choose a successful Windows prototype run for the desired commit, and download its EmOrbit-Windows-x64 artifact while signed in to GitHub. Extract the ZIP and run emorbit.exe from the artifact. The build is unsigned; Windows may show a reputation prompt. Confirm the repository and commit before running it.
 
-There is no published stable release or installer yet.
+The ZIP artifact remains available for portable testing. It is not required when using the setup executable.
+
+## Installer development
+
+The Inno Setup source is packaging/emorbit.iss. After cargo build --release, compile it with ISCC.exe packaging/emorbit.iss from the repository root, passing /DAppVersion to override the version when required. GitHub Actions extracts the version from Cargo.toml automatically. The stable AppId and installation directory must be preserved across updates. The graceful close code uses the native window class and exit message; keep those synchronized with platform.rs.
+
+The Windows workflow compiles setup and runs packaging/test-installer.ps1 in an isolated runner profile. It checks silent installation, executable integrity, a repeated installation, Start menu registration, and uninstall cleanup. It does not validate interactive wizard appearance or live upgrades with a running application. Successful push builds publish a uniquely tagged preview release with the installer as a directly downloadable asset. Pull request builds never publish releases.
 
 ## Controls
 

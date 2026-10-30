@@ -34,6 +34,7 @@ The first native implementation now exists. Implementation is not the same as ve
 ## 5. Distribution
 
 * Automate Windows builds and appropriate checks.
+* Implemented: Inno Setup installer for the current Windows user, Start menu shortcut, optional desktop shortcut, uninstaller, and stable update location. Windows CI tests installation, repeated installation, and removal before publishing a preview installer. Live upgrade behaviour and wizard appearance still require user testing.
 * Publish installation instructions and signed releases when signing is available.
 * Include dependency and dataset notices.
 * Publish measured resource use and known limitations.
